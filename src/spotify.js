@@ -68,7 +68,12 @@ export class SpotifyClient {
 
   writeAuthToDisk(auth) {
     this.auth = auth;
-    fs.writeFileSync(this.authFile, JSON.stringify(auth, null, 2));
+    fs.writeFileSync(this.authFile, JSON.stringify(auth, null, 2), { mode: 0o600 });
+    try {
+      fs.chmodSync(this.authFile, 0o600);
+    } catch {
+      // Ignore platform/filesystem permission limitations.
+    }
   }
 
   setAuth(auth) {

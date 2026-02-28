@@ -24,7 +24,16 @@ const STATE_TTL_MS = 10 * 60 * 1000;
 const SESSION_COOKIE_NAME = "spm_sid";
 const SESSION_COOKIE_TTL_SECONDS = 60 * 60 * 24 * 30;
 const stateStore = new Map();
-fs.mkdirSync(SESSION_DIR, { recursive: true });
+const rateLimitStore = new Map();
+const RATE_LIMIT_WINDOW_MS = 5 * 60 * 1000;
+const RATE_LIMIT_CLEANUP_MS = 60 * 1000;
+let lastRateLimitCleanupAt = 0;
+fs.mkdirSync(SESSION_DIR, { recursive: true, mode: 0o700 });
+try {
+  fs.chmodSync(SESSION_DIR, 0o700);
+} catch {
+  // Ignore platform/filesystem permission limitations.
+}
 
 const MIME_TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -34,17 +43,41 @@ const MIME_TYPES = {
   ".svg": "image/svg+xml; charset=utf-8"
 };
 
+function applySecurityHeaders(res) {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  res.setHeader(
+    "Content-Security-Policy",
+    [
+      "default-src 'self'",
+      "connect-src 'self' https://api.spotify.com https://accounts.spotify.com",
+      "img-src 'self' data: https:",
+      "style-src 'self' https://fonts.googleapis.com",
+      "font-src 'self' https://fonts.gstatic.com",
+      "script-src 'self'",
+      "frame-ancestors 'none'",
+      "base-uri 'self'",
+      "form-action 'self' https://accounts.spotify.com"
+    ].join("; ")
+  );
+}
+
 function sendJson(res, statusCode, body) {
+  applySecurityHeaders(res);
   res.writeHead(statusCode, { "Content-Type": "application/json; charset=utf-8" });
   res.end(JSON.stringify(body));
 }
 
 function sendText(res, statusCode, body) {
+  applySecurityHeaders(res);
   res.writeHead(statusCode, { "Content-Type": "text/plain; charset=utf-8" });
   res.end(body);
 }
 
 function redirect(res, location) {
+  applySecurityHeaders(res);
   res.writeHead(302, { Location: location });
   res.end();
 }
@@ -194,22 +227,29 @@ function normalizeSessionId(value) {
   return value.toLowerCase();
 }
 
-function readSessionId(req) {
+function readSessionHeaderId(req) {
   const headerValue = req.headers["x-spm-session-id"];
   const rawHeader = Array.isArray(headerValue) ? headerValue[0] : headerValue;
-  const headerSessionId = normalizeSessionId(rawHeader);
-  if (headerSessionId) return headerSessionId;
+  return normalizeSessionId(rawHeader);
+}
 
-  try {
-    const reqUrl = new URL(req.url || "/", "http://localhost");
-    const querySessionId = normalizeSessionId(reqUrl.searchParams.get("sid"));
-    if (querySessionId) return querySessionId;
-  } catch {
-    // Ignore malformed URL and fall back to cookie.
-  }
+function readSessionId(req) {
+  const headerSessionId = readSessionHeaderId(req);
+  if (headerSessionId) return headerSessionId;
 
   const cookies = parseCookies(req.headers.cookie);
   return normalizeSessionId(cookies[SESSION_COOKIE_NAME]);
+}
+
+function requireSessionHeader(req, res) {
+  const sessionId = readSessionHeaderId(req);
+  if (!sessionId) {
+    sendJson(res, 400, {
+      error: "Missing session header. Reload the page and try again."
+    });
+    return null;
+  }
+  return sessionId;
 }
 
 function setSessionCookie(req, res, sessionId) {
@@ -238,6 +278,46 @@ function ensureSessionId(req, res) {
   const sessionId = crypto.randomBytes(24).toString("hex");
   setSessionCookie(req, res, sessionId);
   return sessionId;
+}
+
+function clientIp(req) {
+  const forwardedFor = firstForwardedHeaderValue(req.headers["x-forwarded-for"]);
+  if (forwardedFor) return forwardedFor.split(",")[0].trim();
+  return req.socket?.remoteAddress || "unknown";
+}
+
+function cleanupRateLimits(now = Date.now()) {
+  if (now - lastRateLimitCleanupAt < RATE_LIMIT_CLEANUP_MS) return;
+  for (const [key, value] of rateLimitStore.entries()) {
+    if (now - value.startedAt > RATE_LIMIT_WINDOW_MS) {
+      rateLimitStore.delete(key);
+    }
+  }
+  lastRateLimitCleanupAt = now;
+}
+
+function enforceRateLimit(req, res, { bucket, max, windowMs = RATE_LIMIT_WINDOW_MS }) {
+  const now = Date.now();
+  cleanupRateLimits(now);
+  const sessionId = readSessionId(req);
+  const identity = sessionId ? `sid:${sessionId}` : `ip:${clientIp(req)}`;
+  const key = `${bucket}:${identity}`;
+  const entry = rateLimitStore.get(key);
+  if (!entry || now - entry.startedAt > windowMs) {
+    rateLimitStore.set(key, { startedAt: now, count: 1 });
+    return true;
+  }
+  if (entry.count >= max) {
+    const retryAfterSeconds = Math.max(
+      1,
+      Math.ceil((windowMs - (now - entry.startedAt)) / 1000)
+    );
+    res.setHeader("Retry-After", String(retryAfterSeconds));
+    sendJson(res, 429, { error: "Too many requests. Please wait and try again." });
+    return false;
+  }
+  entry.count += 1;
+  return true;
 }
 
 function sessionAuthFile(sessionId) {
@@ -330,6 +410,34 @@ function cleanupExpiredStates() {
       stateStore.delete(state);
     }
   }
+}
+
+function createAuthorizationUrlForSession(req, sessionId) {
+  const state = crypto.randomBytes(16).toString("hex");
+  const redirectUri = buildWebRedirectUri(req);
+  assertSafeRedirectUri(redirectUri);
+
+  const spotify = getSpotifyClientForSession(sessionId, { redirectUri });
+  let codeVerifier = null;
+  let authorizationUrl;
+  if (spotify.authMode === "pkce") {
+    const pair = spotify.createPkcePair();
+    codeVerifier = pair.codeVerifier;
+    authorizationUrl = spotify.getAuthorizationUrl({
+      state,
+      codeChallenge: pair.codeChallenge
+    });
+  } else {
+    authorizationUrl = spotify.getAuthorizationUrl(state);
+  }
+
+  stateStore.set(state, {
+    createdAt: Date.now(),
+    sessionId,
+    codeVerifier,
+    redirectUri
+  });
+  return authorizationUrl;
 }
 
 async function readJsonBody(req) {
@@ -487,13 +595,19 @@ function handlePresets(_req, res) {
 
 function handleClientConfigGet(req, res) {
   const sessionId = ensureSessionId(req, res);
+  setSessionCookie(req, res, sessionId);
   sendJson(res, 200, getClientConfigSummary(sessionId, req));
 }
 
 async function handleClientConfigSave(req, res) {
+  if (!enforceRateLimit(req, res, { bucket: "client-config-save", max: 30 })) {
+    return;
+  }
   try {
     const body = await readJsonBody(req);
-    const sessionId = ensureSessionId(req, res);
+    const sessionId = requireSessionHeader(req, res);
+    if (!sessionId) return;
+    setSessionCookie(req, res, sessionId);
     const clientId = String(body.clientId || "").trim();
     const clientSecret = String(body.clientSecret || "").trim();
     const authMode = normalizeAuthMode(body.authMode, config.authMode);
@@ -514,7 +628,12 @@ async function handleClientConfigSave(req, res) {
       authMode,
       updatedAt: new Date().toISOString()
     };
-    fs.writeFileSync(filePath, JSON.stringify(payload, null, 2));
+    fs.writeFileSync(filePath, JSON.stringify(payload, null, 2), { mode: 0o600 });
+    try {
+      fs.chmodSync(filePath, 0o600);
+    } catch {
+      // Ignore platform/filesystem permission limitations.
+    }
 
     // Credentials changed; force re-auth with fresh token for this session config.
     removeFileIfExists(sessionAuthFile(sessionId));
@@ -525,18 +644,24 @@ async function handleClientConfigSave(req, res) {
 }
 
 function handleClientConfigClear(req, res) {
-  const sessionId = ensureSessionId(req, res);
+  if (!enforceRateLimit(req, res, { bucket: "client-config-clear", max: 30 })) {
+    return;
+  }
+  const sessionId = requireSessionHeader(req, res);
+  if (!sessionId) return;
+  setSessionCookie(req, res, sessionId);
   removeFileIfExists(sessionClientConfigFile(sessionId));
   removeFileIfExists(sessionAuthFile(sessionId));
   sendJson(res, 200, getClientConfigSummary(sessionId, req));
 }
 
 async function handleSync(req, res) {
-  const sessionId = readSessionId(req);
-  if (!sessionId) {
-    sendJson(res, 401, { error: "Not authorized. Connect Spotify first." });
+  if (!enforceRateLimit(req, res, { bucket: "sync", max: 24 })) {
     return;
   }
+  const sessionId = requireSessionHeader(req, res);
+  if (!sessionId) return;
+  setSessionCookie(req, res, sessionId);
   const spotify = getSpotifyClientForSession(sessionId);
   if (!spotify.isAuthorized()) {
     sendJson(res, 401, { error: "Not authorized. Connect Spotify first." });
@@ -566,36 +691,36 @@ async function handleSync(req, res) {
 async function handleAuthLogin(_req, res) {
   cleanupExpiredStates();
   const req = _req;
-  const sessionId = ensureSessionId(req, res);
-  const state = crypto.randomBytes(16).toString("hex");
-  const redirectUri = buildWebRedirectUri(req);
-  try {
-    assertSafeRedirectUri(redirectUri);
-  } catch (err) {
-    sendText(res, 400, `${err.message}. Use https://YOUR_HOST/callback in Spotify app settings.`);
+  if (!enforceRateLimit(req, res, { bucket: "auth-login", max: 18 })) {
     return;
   }
-
-  const spotify = getSpotifyClientForSession(sessionId, { redirectUri });
-  let codeVerifier = null;
-  let authorizationUrl;
-  if (spotify.authMode === "pkce") {
-    const pair = spotify.createPkcePair();
-    codeVerifier = pair.codeVerifier;
-    authorizationUrl = spotify.getAuthorizationUrl({
-      state,
-      codeChallenge: pair.codeChallenge
-    });
-  } else {
-    authorizationUrl = spotify.getAuthorizationUrl(state);
+  const sessionId = ensureSessionId(req, res);
+  setSessionCookie(req, res, sessionId);
+  try {
+    const authorizationUrl = createAuthorizationUrlForSession(req, sessionId);
+    redirect(res, authorizationUrl);
+  } catch (err) {
+    sendText(res, 400, `${err.message}. Use https://YOUR_HOST/callback in Spotify app settings.`);
   }
-  stateStore.set(state, {
-    createdAt: Date.now(),
-    sessionId,
-    codeVerifier,
-    redirectUri
-  });
-  redirect(res, authorizationUrl);
+}
+
+async function handleAuthLoginUrl(req, res) {
+  cleanupExpiredStates();
+  if (!enforceRateLimit(req, res, { bucket: "auth-login", max: 18 })) {
+    return;
+  }
+  const sessionId = requireSessionHeader(req, res);
+  if (!sessionId) return;
+  setSessionCookie(req, res, sessionId);
+
+  try {
+    const authorizationUrl = createAuthorizationUrlForSession(req, sessionId);
+    sendJson(res, 200, { authorizationUrl });
+  } catch (err) {
+    sendJson(res, 400, {
+      error: `${err.message}. Use https://YOUR_HOST/callback in Spotify app settings.`
+    });
+  }
 }
 
 async function handleAuthCallback(req, reqUrl, res) {
@@ -638,6 +763,9 @@ async function handleAuthCallback(req, reqUrl, res) {
 }
 
 function handleAuthLogout(req, res) {
+  if (!enforceRateLimit(req, res, { bucket: "auth-logout", max: 20 })) {
+    return;
+  }
   const sessionId = readSessionId(req);
   if (sessionId) {
     removeFileIfExists(sessionAuthFile(sessionId));
@@ -645,6 +773,18 @@ function handleAuthLogout(req, res) {
   }
   clearSessionCookie(req, res);
   redirect(res, "/?logged_out=1");
+}
+
+function handleAuthLogoutApi(req, res) {
+  if (!enforceRateLimit(req, res, { bucket: "auth-logout", max: 20 })) {
+    return;
+  }
+  const sessionId = requireSessionHeader(req, res);
+  if (!sessionId) return;
+  removeFileIfExists(sessionAuthFile(sessionId));
+  removeFileIfExists(sessionClientConfigFile(sessionId));
+  clearSessionCookie(req, res);
+  sendJson(res, 200, { ok: true });
 }
 
 function serveStatic(reqUrl, res) {
@@ -662,13 +802,26 @@ function serveStatic(reqUrl, res) {
 
   const ext = path.extname(requestedPath);
   const contentType = MIME_TYPES[ext] || "application/octet-stream";
-  res.writeHead(200, { "Content-Type": contentType });
+  applySecurityHeaders(res);
+  const cacheControl =
+    ext === ".html"
+      ? "no-store"
+      : "public, max-age=3600";
+  res.writeHead(200, {
+    "Content-Type": contentType,
+    "Cache-Control": cacheControl
+  });
   fs.createReadStream(requestedPath).pipe(res);
 }
 
 const server = http.createServer(async (req, res) => {
   const reqUrl = new URL(req.url, `http://${req.headers.host}`);
   const normalizedPath = normalizePathname(reqUrl.pathname);
+
+  // Hard cap early to reduce abuse surface.
+  if (!enforceRateLimit(req, res, { bucket: "all-requests", max: 600 })) {
+    return;
+  }
 
   if (req.method === "GET" && normalizedPath === "/api/status") {
     await handleStatus(req, res);
@@ -697,6 +850,16 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === "POST" && normalizedPath === "/api/sync") {
     await handleSync(req, res);
+    return;
+  }
+
+  if (req.method === "GET" && normalizedPath === "/api/auth/login-url") {
+    await handleAuthLoginUrl(req, res);
+    return;
+  }
+
+  if (req.method === "POST" && normalizedPath === "/api/auth/logout") {
+    handleAuthLogoutApi(req, res);
     return;
   }
 

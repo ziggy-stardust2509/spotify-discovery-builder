@@ -46,6 +46,17 @@ function parseIntOr(value, fallback) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function safeSpotifyUrl(value) {
+  try {
+    const parsed = new URL(String(value || ""));
+    if (parsed.protocol !== "https:") return null;
+    if (parsed.hostname !== "open.spotify.com") return null;
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
 function isPublicNonHttpsUrl(value) {
   try {
     const parsed = new URL(value);
@@ -82,19 +93,12 @@ function ensureSessionId() {
   return created;
 }
 
-function withSessionUrl(url) {
-  const sid = ensureSessionId();
-  const next = new URL(url, window.location.origin);
-  next.searchParams.set("sid", sid);
-  return `${next.pathname}${next.search}`;
-}
-
 function updateAuthLinks() {
   if (els.connectLink) {
-    els.connectLink.href = withSessionUrl("/auth/login");
+    els.connectLink.href = "/auth/login";
   }
   if (els.disconnectLink) {
-    els.disconnectLink.href = withSessionUrl("/auth/logout");
+    els.disconnectLink.href = "/auth/logout";
   }
 }
 
@@ -150,6 +154,43 @@ function setStatus(kind, text) {
 
 function setClientConfigNote(text) {
   els.clientConfigNote.textContent = text;
+}
+
+async function handleAuthorizeClick(event) {
+  event.preventDefault();
+  const originalText = els.connectLink.textContent;
+  els.connectLink.textContent = "Opening Spotify...";
+  els.connectLink.setAttribute("aria-disabled", "true");
+  els.connectLink.style.pointerEvents = "none";
+  try {
+    const response = await apiFetch("/api/auth/login-url");
+    const data = await response.json();
+    if (!response.ok || !data.authorizationUrl) {
+      throw new Error(data.error || "Could not start Spotify authorization.");
+    }
+    window.location.assign(data.authorizationUrl);
+  } catch (err) {
+    els.connectLink.textContent = originalText;
+    els.connectLink.removeAttribute("aria-disabled");
+    els.connectLink.style.pointerEvents = "";
+    setStatus("error", `Authorization failed: ${err.message}`);
+  }
+}
+
+async function handleLogoutClick(event) {
+  event.preventDefault();
+  try {
+    const response = await apiFetch("/api/auth/logout", { method: "POST" });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || "Could not sign out.");
+    }
+    setStatus("neutral", "Disconnected. Authorize Spotify to reconnect.");
+    els.resultSummary.textContent = "Spotify session disconnected for this browser.";
+    await loadStatus();
+  } catch (err) {
+    setStatus("error", `Logout failed: ${err.message}`);
+  }
 }
 
 function applyAuthModeUI() {
@@ -327,8 +368,14 @@ function renderResult(result) {
   for (const track of result.selected || []) {
     const li = document.createElement("li");
     const artistText = (track.artists || []).join(", ");
-    if (track.url) {
-      li.innerHTML = `<a href="${track.url}" target="_blank" rel="noreferrer">${track.name}</a> — ${artistText}`;
+    const url = safeSpotifyUrl(track.url);
+    if (url) {
+      const link = document.createElement("a");
+      link.href = url;
+      link.target = "_blank";
+      link.rel = "noreferrer";
+      link.textContent = track.name;
+      li.append(link, document.createTextNode(` — ${artistText}`));
     } else {
       li.textContent = `${track.name} — ${artistText}`;
     }
@@ -394,6 +441,8 @@ function init() {
   els.clearClientConfig.addEventListener("click", clearClientConfig);
   els.authMode.addEventListener("change", applyAuthModeUI);
   els.discoveryLevel.addEventListener("input", updateDiscoveryUI);
+  els.connectLink.addEventListener("click", handleAuthorizeClick);
+  els.disconnectLink.addEventListener("click", handleLogoutClick);
 
   loadPresets()
     .then(() => loadClientConfig())
