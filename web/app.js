@@ -3,6 +3,51 @@ const state = {
   sessionId: null
 };
 
+const STARTER_VARIANTS = [
+  {
+    name: "Future Pocket Explorer",
+    prompt: "off-grid grooves, futuristic rhythm section, jazz-electronic hybrids, heavy pocket",
+    artists: "Yussef Dayes, BADBADNOTGOOD, Tennyson",
+    genres: "jazz fusion, broken beat, electronic",
+    discoveryLevel: 75,
+    maxPerArtist: 2
+  },
+  {
+    name: "Late Night Rhythm Lab",
+    prompt: "moody low-end, head-nod drums, neo-soul textures, left-field beat science",
+    artists: "Thundercat, Hiatus Kaiyote, KAYTRANADA",
+    genres: "neo soul, alternative hip hop, future beats",
+    discoveryLevel: 70,
+    maxPerArtist: 2
+  },
+  {
+    name: "Alt Groove Signal",
+    prompt: "tight live drums, genre-blend momentum, punchy basslines, adventurous groove writing",
+    artists: "Anderson .Paak, Vulfpeck, The Comet Is Coming",
+    genres: "funk, jazz fusion, indie soul",
+    discoveryLevel: 68,
+    maxPerArtist: 3
+  },
+  {
+    name: "Uncharted Bounce",
+    prompt: "restless percussive movement, creative syncopation, global rhythm influence, modern production",
+    artists: "Sango, Ezra Collective, Alfa Mist",
+    genres: "broken beat, jazz rap, afrobeat",
+    discoveryLevel: 82,
+    maxPerArtist: 2
+  },
+  {
+    name: "Underground Motion",
+    prompt: "driving drums, gritty textures, kinetic build-ups, club-ready energy without pop repetition",
+    artists: "Overmono, Floating Points, Four Tet",
+    genres: "electronic, UK garage, drum and bass",
+    discoveryLevel: 77,
+    maxPerArtist: 2
+  }
+];
+
+const PREFILL_CLEAR_IDS = ["name", "prompt", "artists", "genres"];
+
 const els = {
   form: document.querySelector("#sync-form"),
   preset: document.querySelector("#preset"),
@@ -44,6 +89,45 @@ const els = {
 function parseIntOr(value, fallback) {
   const parsed = Number.parseInt(String(value ?? ""), 10);
   return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function randomItem(items) {
+  if (!Array.isArray(items) || !items.length) return null;
+  return items[Math.floor(Math.random() * items.length)] || null;
+}
+
+function markPrefilledValue(element, value) {
+  if (!element) return;
+  element.value = value;
+  element.dataset.prefilled = "true";
+}
+
+function clearPrefillFlag(element) {
+  if (!element) return;
+  delete element.dataset.prefilled;
+}
+
+function clearStarterPrefillFlags() {
+  for (const id of PREFILL_CLEAR_IDS) {
+    clearPrefillFlag(els[id]);
+  }
+}
+
+function bindPrefillClearOnType(element) {
+  if (!element) return;
+  const clearNow = () => {
+    if (element.dataset.prefilled !== "true") return;
+    element.value = "";
+    clearPrefillFlag(element);
+  };
+  element.addEventListener("beforeinput", (event) => {
+    if (element.dataset.prefilled !== "true") return;
+    const inputType = String(event.inputType || "");
+    if (!inputType || inputType.startsWith("insert") || inputType.startsWith("delete")) {
+      clearNow();
+    }
+  });
+  element.addEventListener("paste", clearNow);
 }
 
 function safeSpotifyUrl(value) {
@@ -226,6 +310,20 @@ function applyPresetToForm(name) {
   );
   els.excludeArtists.value = "";
   els.strictExplore.checked = preset.strictExplore === true;
+  clearStarterPrefillFlags();
+  updateDiscoveryUI();
+}
+
+function applyRandomStarterPrefill() {
+  const starter = randomItem(STARTER_VARIANTS);
+  if (!starter) return;
+  els.preset.value = "";
+  markPrefilledValue(els.name, starter.name || "");
+  markPrefilledValue(els.prompt, starter.prompt || "");
+  markPrefilledValue(els.artists, starter.artists || "");
+  markPrefilledValue(els.genres, starter.genres || "");
+  els.discoveryLevel.value = String(parseIntOr(starter.discoveryLevel, 70));
+  els.maxPerArtist.value = String(parseIntOr(starter.maxPerArtist, 2));
   updateDiscoveryUI();
 }
 
@@ -249,14 +347,43 @@ async function loadStatus() {
     const data = await response.json();
     if (data.authenticated) {
       setStatus("ok", `Logged in as ${data.user.displayName}`);
+      return { ok: true, authenticated: true };
     } else if (data.error) {
       setStatus("error", data.error);
+      return { ok: false, authenticated: false, error: data.error };
     } else {
       setStatus("neutral", "Not connected to Spotify yet.");
+      return { ok: true, authenticated: false };
     }
   } catch (err) {
     setStatus("error", `Status check failed: ${err.message}`);
+    return { ok: false, authenticated: false, error: err.message };
   }
+}
+
+async function handleRefreshStatusClick(event) {
+  event.preventDefault();
+  const originalText = els.refreshStatus.textContent;
+  els.refreshStatus.disabled = true;
+  els.refreshStatus.textContent = "Checking...";
+  setStatus("neutral", "Checking Spotify connection...");
+
+  const result = await loadStatus();
+
+  const checkedAt = new Date().toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit"
+  });
+  if (result.ok) {
+    els.resultSummary.textContent = result.authenticated
+      ? `Connection confirmed at ${checkedAt}.`
+      : `Checked at ${checkedAt}: not connected yet.`;
+  } else {
+    els.resultSummary.textContent = `Connection check failed at ${checkedAt}.`;
+  }
+
+  els.refreshStatus.disabled = false;
+  els.refreshStatus.textContent = originalText;
 }
 
 async function loadClientConfig() {
@@ -428,6 +555,10 @@ async function submitForm(event) {
 function init() {
   ensureSessionId();
   updateAuthLinks();
+  bindPrefillClearOnType(els.name);
+  bindPrefillClearOnType(els.prompt);
+  bindPrefillClearOnType(els.artists);
+  bindPrefillClearOnType(els.genres);
   if (els.callbackUri) {
     els.callbackUri.textContent = `${window.location.origin}/callback`;
   }
@@ -436,7 +567,7 @@ function init() {
     applyPresetToForm(els.preset.value);
   });
   els.form.addEventListener("submit", submitForm);
-  els.refreshStatus.addEventListener("click", loadStatus);
+  els.refreshStatus.addEventListener("click", handleRefreshStatusClick);
   els.clientConfigForm.addEventListener("submit", saveClientConfig);
   els.clearClientConfig.addEventListener("click", clearClientConfig);
   els.authMode.addEventListener("change", applyAuthModeUI);
@@ -456,8 +587,7 @@ function init() {
         els.resultSummary.textContent = "Spotify session disconnected for this browser.";
       }
       if (!els.name.value) {
-        els.preset.value = "drumming";
-        applyPresetToForm("drumming");
+        applyRandomStarterPrefill();
       }
       updateDiscoveryUI();
       return loadStatus();
