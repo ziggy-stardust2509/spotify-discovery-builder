@@ -64,6 +64,12 @@ function applySecurityHeaders(res) {
   );
 }
 
+function applyTransportSecurityHeaders(req, res) {
+  if (requestProto(req) === "https") {
+    res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+  }
+}
+
 function sendJson(res, statusCode, body) {
   applySecurityHeaders(res);
   res.writeHead(statusCode, { "Content-Type": "application/json; charset=utf-8" });
@@ -817,6 +823,15 @@ function serveStatic(reqUrl, res) {
 const server = http.createServer(async (req, res) => {
   const reqUrl = new URL(req.url, `http://${req.headers.host}`);
   const normalizedPath = normalizePathname(reqUrl.pathname);
+  applyTransportSecurityHeaders(req, res);
+
+  const proto = requestProto(req);
+  const host = requestHost(req);
+  if (proto === "http" && host && !isLoopbackHost(hostToHostname(host))) {
+    const httpsLocation = `https://${host}${reqUrl.pathname}${reqUrl.search}`;
+    redirect(res, httpsLocation);
+    return;
+  }
 
   // Hard cap early to reduce abuse surface.
   if (!enforceRateLimit(req, res, { bucket: "all-requests", max: 600 })) {
