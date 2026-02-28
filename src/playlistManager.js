@@ -114,6 +114,73 @@ function tokenizeLoose(text) {
     .filter((token) => token && token.length > 2);
 }
 
+function parseTemporalConstraint(input) {
+  const text = String(input || "").toLowerCase();
+  if (!text) return null;
+
+  const clampYear = (year) => clampInt(year, 1900, 2099, 2000);
+  const fromDecade = (startYear) => {
+    const safeStart = clampYear(startYear);
+    return {
+      minYear: safeStart,
+      maxYear: safeStart + 9,
+      label: `${safeStart}s`,
+      query: `year:${safeStart}-${safeStart + 9}`
+    };
+  };
+
+  const explicitRange = text.match(/\b(19\d{2}|20\d{2})\s*(?:-|to|through|thru)\s*(19\d{2}|20\d{2})\b/);
+  if (explicitRange) {
+    const first = clampYear(Number(explicitRange[1]));
+    const second = clampYear(Number(explicitRange[2]));
+    const minYear = Math.min(first, second);
+    const maxYear = Math.max(first, second);
+    return {
+      minYear,
+      maxYear,
+      label: `${minYear}-${maxYear}`,
+      query: `year:${minYear}-${maxYear}`
+    };
+  }
+
+  const fullDecade = text.match(/\b((?:19|20)\d)0s\b/);
+  if (fullDecade) {
+    return fromDecade(Number(`${fullDecade[1]}0`));
+  }
+
+  const shortDecade = text.match(/\b(\d{2})['’]?s\b/);
+  if (shortDecade) {
+    const decade = Number(shortDecade[1]);
+    const century = decade >= 30 ? 1900 : 2000;
+    return fromDecade(century + decade);
+  }
+
+  const years = Array.from(text.matchAll(/\b(19\d{2}|20\d{2})\b/g)).map((match) =>
+    clampYear(Number(match[1]))
+  );
+  if (years.length >= 2) {
+    const minYear = Math.min(...years);
+    const maxYear = Math.max(...years);
+    return {
+      minYear,
+      maxYear,
+      label: `${minYear}-${maxYear}`,
+      query: `year:${minYear}-${maxYear}`
+    };
+  }
+  if (years.length === 1) {
+    const year = years[0];
+    return {
+      minYear: year,
+      maxYear: year,
+      label: String(year),
+      query: `year:${year}`
+    };
+  }
+
+  return null;
+}
+
 function normalizeCsv(input) {
   if (!input) return [];
   return input
@@ -236,6 +303,12 @@ function normalizeTrackTitle(title) {
     .replace(/[^a-z0-9\s]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function yearMatchesConstraint(year, temporalConstraint) {
+  if (!temporalConstraint) return true;
+  if (!Number.isFinite(Number(year))) return false;
+  return year >= temporalConstraint.minYear && year <= temporalConstraint.maxYear;
 }
 
 function parseSpotifyTrackId(value) {
@@ -415,6 +488,7 @@ function buildSearchQueries({
   artists,
   genres,
   seedTrack = null,
+  temporalConstraint = null,
   maxQueries = 12,
   discoveryLevel = 50
 }) {
@@ -488,8 +562,17 @@ function buildSearchQueries({
   if (!set.size) {
     set.add("genre:\"indie\"");
   }
+  const queries = Array.from(set);
+  if (!temporalConstraint?.query) {
+    return queries.slice(0, maxQueries);
+  }
 
-  return Array.from(set).slice(0, maxQueries);
+  const constrained = [];
+  for (const query of queries) {
+    constrained.push(`${query} ${temporalConstraint.query}`.trim());
+  }
+  constrained.push(temporalConstraint.query);
+  return Array.from(new Set(constrained)).slice(0, maxQueries);
 }
 
 function trackShouldBeExcluded(track, context) {
@@ -498,6 +581,12 @@ function trackShouldBeExcluded(track, context) {
   if (context.seedTrackUri && track.uri === context.seedTrackUri) return true;
   if (context.seedTrackTitleKey && canonicalTrackKey(track) === context.seedTrackTitleKey) {
     return true;
+  }
+  if (context.temporalConstraint) {
+    const year = extractReleaseYear(track);
+    if (year && !yearMatchesConstraint(year, context.temporalConstraint)) {
+      return true;
+    }
   }
 
   for (const blocked of context.excludeArtistTokens) {
@@ -537,6 +626,7 @@ function scoreTrack(track, context) {
   const trace = context.traceByUri.get(track.uri) || createTrace();
   const title = normalizeTrackTitle(track.name || "");
   const haystackTokens = new Set(tokenizeLoose(haystack));
+  const year = extractReleaseYear(track);
 
   const novelty = clamp01(context.discoveryLevel / 100);
   const familiarity = 1 - novelty;
@@ -613,11 +703,18 @@ function scoreTrack(track, context) {
       score -= 0.28;
     }
   }
-
-  const year = extractReleaseYear(track);
   if (year) {
     const recentness = clamp01((year - (context.currentYear - 25)) / 25);
     score += recentness * (0.12 + 0.44 * novelty);
+  }
+  if (context.temporalConstraint) {
+    if (yearMatchesConstraint(year, context.temporalConstraint)) {
+      score += 1.15 + 0.35 * familiarity;
+    } else if (year) {
+      score -= 4.5;
+    } else {
+      score -= 0.75;
+    }
   }
 
   const durationMs = Number(track.duration_ms || 0);
@@ -638,6 +735,8 @@ function scoreTrack(track, context) {
   return {
     score,
     confidence,
+    year,
+    temporalMatch: yearMatchesConstraint(year, context.temporalConstraint),
     promptCoverage,
     queryFamilyCount,
     seedRecHits: trace.seedRecHits,
@@ -736,6 +835,9 @@ export async function buildTrackSelection(client, options) {
   );
   const likedProfilePromise = loadLikedProfile(client);
   const seedTrack = seedSong ? await resolveSeedTrack(client, seedSong) : null;
+  const temporalConstraint = parseTemporalConstraint(
+    `${options.name || ""} ${prompt}`.trim()
+  );
   if (seedTrack) {
     maxPerArtist = Math.min(maxPerArtist, discoveryLevel >= 65 ? 1 : 2);
   }
@@ -745,6 +847,7 @@ export async function buildTrackSelection(client, options) {
     artists: artistList,
     genres: genreList,
     seedTrack,
+    temporalConstraint,
     maxQueries: Number(options.maxQueries || 12),
     discoveryLevel
   });
@@ -824,6 +927,7 @@ export async function buildTrackSelection(client, options) {
     seedTrackTitleKey: seedTrack ? canonicalTrackKey(seedTrack) : "",
     seedTrackArtistSet: new Set(seedTrackArtistsLower),
     seedTrackTokens,
+    temporalConstraint,
     allowedTitleHints: buildAllowedTitleHints(promptTokens),
     traceByUri,
     currentYear: new Date().getUTCFullYear(),
@@ -841,13 +945,16 @@ export async function buildTrackSelection(client, options) {
   const confidenceThreshold = 1.2 - 0.35 * novelty;
   const corePool = scored.filter(
     (item) =>
-      item.seedArtistMatches > 0 ||
-      item.seedRecHits > 0 ||
-      item.likedArtistMatches > 0 ||
-      item.likedTokenCoverage >= 0.2 ||
-      item.queryFamilyCount >= 2 ||
-      item.promptCoverage >= basePromptThreshold ||
-      item.confidence >= confidenceThreshold
+      (!temporalConstraint || item.temporalMatch || !item.year) &&
+      (
+        item.seedArtistMatches > 0 ||
+        item.seedRecHits > 0 ||
+        item.likedArtistMatches > 0 ||
+        item.likedTokenCoverage >= 0.2 ||
+        item.queryFamilyCount >= 2 ||
+        item.promptCoverage >= basePromptThreshold ||
+        item.confidence >= confidenceThreshold
+      )
   );
   const coreRatio = strictExplore
     ? 0.5 - 0.2 * novelty
@@ -874,7 +981,8 @@ export async function buildTrackSelection(client, options) {
     candidates: scored,
     seedTrack: summarizeSeedTrack(seedTrack),
     tasteProfile: {
-      likedTracksAnalyzed: likedProfile.trackCount
+      likedTracksAnalyzed: likedProfile.trackCount,
+      eraTarget: temporalConstraint?.label || null
     }
   };
 }

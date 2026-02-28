@@ -436,6 +436,9 @@ function renderResult(result) {
   if (Number.isFinite(Number(result.tasteProfile?.likedTracksAnalyzed))) {
     summaryBits.push(`Liked tracks analyzed: ${Number(result.tasteProfile.likedTracksAnalyzed)}`);
   }
+  if (result.tasteProfile?.eraTarget) {
+    summaryBits.push(`Era: ${result.tasteProfile.eraTarget}`);
+  }
   if (result.seedTrack?.name) {
     const seedArtists = Array.isArray(result.seedTrack.artists)
       ? result.seedTrack.artists.join(", ")
