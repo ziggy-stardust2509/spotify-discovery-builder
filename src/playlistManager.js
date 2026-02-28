@@ -238,6 +238,118 @@ function normalizeTrackTitle(title) {
     .trim();
 }
 
+function parseSpotifyTrackId(value) {
+  const input = String(value || "").trim();
+  if (!input) return null;
+  if (/^[A-Za-z0-9]{22}$/.test(input)) return input;
+  const uriMatch = input.match(/^spotify:track:([A-Za-z0-9]{22})$/i);
+  if (uriMatch) return uriMatch[1];
+  try {
+    const parsed = new URL(input);
+    const parts = parsed.pathname.split("/").filter(Boolean);
+    if (parts[0] === "track" && /^[A-Za-z0-9]{22}$/.test(parts[1] || "")) {
+      return parts[1];
+    }
+  } catch {
+    // Not a valid URL.
+  }
+  return null;
+}
+
+function chooseBestSeedTrack(query, tracks = []) {
+  if (!tracks.length) return null;
+  const queryLower = String(query || "").toLowerCase();
+  const queryTokens = tokenizeLoose(queryLower).filter(isHighSignalToken);
+  const scored = tracks
+    .filter((track) => track?.uri)
+    .map((track) => {
+      const text = [track.name || "", ...(track.artists || []).map((a) => a.name || "")]
+        .join(" ")
+        .toLowerCase();
+      const tokenHits = queryTokens.reduce(
+        (count, token) => (text.includes(token) ? count + 1 : count),
+        0
+      );
+      const exact = queryLower && text.includes(queryLower) ? 1 : 0;
+      const popularity = Number(track.popularity || 0) / 100;
+      const score = exact * 3 + tokenHits * 0.9 + popularity * 0.45;
+      return { track, score };
+    })
+    .sort((a, b) => b.score - a.score);
+  return scored[0]?.track || tracks[0];
+}
+
+function summarizeSeedTrack(track) {
+  if (!track?.uri) return null;
+  return {
+    id: track.id,
+    uri: track.uri,
+    name: track.name,
+    artists: (track.artists || []).map((artist) => artist.name).filter(Boolean),
+    url: track.external_urls?.spotify
+  };
+}
+
+async function resolveSeedTrack(client, seedSongInput) {
+  const value = String(seedSongInput || "").trim();
+  if (!value) return null;
+  const trackId = parseSpotifyTrackId(value);
+  if (trackId) {
+    try {
+      return await client.getTrack(trackId);
+    } catch (err) {
+      throw new Error(`Could not load seed song from Spotify link/ID: ${err.message}`);
+    }
+  }
+  const search = await client.searchTracks(value, 12, 0);
+  const best = chooseBestSeedTrack(value, search?.tracks?.items || []);
+  if (!best) {
+    throw new Error(`No Spotify track found for seed song "${value}".`);
+  }
+  return best;
+}
+
+async function fetchSeedSongRecommendations(client, seedTrack, discoveryLevel) {
+  if (!seedTrack?.id) return [];
+  const novelty = clamp01(discoveryLevel / 100);
+  const profiles = [
+    {
+      limit: 100,
+      minPopularity: clampInt(18 - Math.round(novelty * 12), 0, 100, 8),
+      maxPopularity: clampInt(86 - Math.round(novelty * 16), 0, 100, 70)
+    },
+    {
+      limit: 100,
+      minPopularity: 0,
+      maxPopularity: clampInt(68 - Math.round(novelty * 20), 0, 100, 55)
+    },
+    {
+      limit: 100,
+      minPopularity: 0,
+      maxPopularity: clampInt(52 - Math.round(novelty * 18), 0, 100, 40)
+    }
+  ];
+  const results = [];
+  for (const profile of profiles) {
+    try {
+      const rec = await client.getRecommendations({
+        seedTracks: [seedTrack.id],
+        limit: profile.limit,
+        minPopularity: profile.minPopularity,
+        maxPopularity: profile.maxPopularity
+      });
+      for (const track of rec?.tracks || []) {
+        if (track?.uri) {
+          results.push(track);
+        }
+      }
+    } catch {
+      // Recommendation endpoint can fail for some edge inputs; keep flow resilient.
+    }
+  }
+  return results;
+}
+
 function extractReleaseYear(track) {
   const raw = String(track?.album?.release_date || "").trim();
   if (!raw) return null;
@@ -285,6 +397,7 @@ function createTrace() {
     artistHits: 0,
     genreHits: 0,
     promptHits: 0,
+    seedRecHits: 0,
     querySet: new Set()
   };
 }
@@ -301,6 +414,7 @@ function buildSearchQueries({
   prompt,
   artists,
   genres,
+  seedTrack = null,
   maxQueries = 12,
   discoveryLevel = 50
 }) {
@@ -308,6 +422,24 @@ function buildSearchQueries({
   const promptTokens = tokenize(prompt);
   const novelty = clamp01(discoveryLevel / 100);
   const artistCap = novelty >= 0.8 ? Math.min(2, artists.length) : artists.length;
+
+  if (seedTrack) {
+    const seedArtist = seedTrack.artists?.[0]?.name || "";
+    const seedTitleTokens = tokenize(seedTrack.name || "").slice(0, 4);
+    const seedArtistTokens = tokenize(seedArtist).slice(0, 2);
+    if (seedArtist) {
+      set.add(`artist:"${seedArtist}"`);
+      if (seedTitleTokens.length) {
+        set.add(`artist:"${seedArtist}" ${seedTitleTokens.slice(0, 2).join(" ")}`);
+      }
+    }
+    if (seedTitleTokens.length) {
+      set.add(seedTitleTokens.join(" "));
+    }
+    if (seedArtistTokens.length && promptTokens.length) {
+      set.add(`${seedArtistTokens.join(" ")} ${promptTokens.slice(0, 2).join(" ")}`);
+    }
+  }
 
   for (const artist of artists.slice(0, artistCap)) {
     set.add(`artist:"${artist}"`);
@@ -363,6 +495,10 @@ function buildSearchQueries({
 function trackShouldBeExcluded(track, context) {
   const artistNames = (track.artists || []).map((a) => (a.name || "").toLowerCase());
   const normalizedTitle = normalizeTrackTitle(track.name || "");
+  if (context.seedTrackUri && track.uri === context.seedTrackUri) return true;
+  if (context.seedTrackTitleKey && canonicalTrackKey(track) === context.seedTrackTitleKey) {
+    return true;
+  }
 
   for (const blocked of context.excludeArtistTokens) {
     if (artistNames.some((name) => name.includes(blocked))) return true;
@@ -413,7 +549,8 @@ function scoreTrack(track, context) {
   const queryFamilyCount =
     (trace.artistHits > 0 ? 1 : 0) +
     (trace.genreHits > 0 ? 1 : 0) +
-    (trace.promptHits > 0 ? 1 : 0);
+    (trace.promptHits > 0 ? 1 : 0) +
+    (trace.seedRecHits > 0 ? 1 : 0);
   const seedArtistMatches = context.artistSeedsLower.reduce((count, artist) => {
     if (artistNames.some((name) => name.includes(artist))) return count + 1;
     return count;
@@ -428,14 +565,21 @@ function scoreTrack(track, context) {
   const likedTokenCoverage = context.likedTokenSet.size
     ? likedTokenMatches / Math.min(14, context.likedTokenSet.size)
     : 0;
+  const seedTrackTokenMatches = countTokenSetMatches(haystackTokens, context.seedTrackTokens);
+  const sameSeedArtistMatches = artistNames.reduce((count, name) => {
+    if (context.seedTrackArtistSet.has(name)) return count + 1;
+    return count;
+  }, 0);
 
   const confidence =
     queryFamilyCount * 0.7 +
     Math.min(4, trace.hits) * 0.34 +
     promptCoverage * 1.8 +
+    trace.seedRecHits * (0.9 + 0.35 * novelty) +
     seedArtistMatches * (1 + 0.8 * familiarity) +
     likedArtistMatches * (0.55 + 0.75 * familiarity) +
     likedTokenCoverage * (0.55 + 0.85 * familiarity) +
+    seedTrackTokenMatches * (0.26 + 0.22 * familiarity) +
     seedArtistTokenMatches * (0.32 + 0.22 * familiarity) +
     seedGenreTokenMatches * (0.22 + 0.2 * novelty);
 
@@ -448,11 +592,16 @@ function scoreTrack(track, context) {
 
   score += seedArtistMatches * (1.5 * familiarity);
   score -= seedArtistMatches * (0.95 * novelty);
+  score += trace.seedRecHits * (0.45 + 0.42 * novelty);
+  score += seedTrackTokenMatches * (0.18 + 0.15 * familiarity);
   score += likedArtistMatches * (0.52 + 0.6 * familiarity);
   score += likedTokenCoverage * (0.5 + 0.6 * familiarity);
   score += seedArtistTokenMatches * (0.24 + 0.12 * familiarity);
   score += seedGenreTokenMatches * (0.1 + 0.16 * novelty);
   score += confidence * (0.24 + 0.2 * familiarity);
+  if (sameSeedArtistMatches > 0) {
+    score -= sameSeedArtistMatches * (0.55 + 1.05 * novelty);
+  }
 
   for (const hint of TITLE_NOISE_HINTS) {
     if (title.includes(hint) && !context.allowedTitleHints.has(hint)) {
@@ -491,6 +640,7 @@ function scoreTrack(track, context) {
     confidence,
     promptCoverage,
     queryFamilyCount,
+    seedRecHits: trace.seedRecHits,
     seedArtistMatches,
     likedArtistMatches,
     likedTokenCoverage
@@ -573,53 +723,81 @@ export async function buildTrackSelection(client, options) {
   const artistList = options.artistList || [];
   const genreList = options.genreList || [];
   const excludeArtistList = options.excludeArtistList || [];
+  const seedSong = String(options.seedSong || "").trim();
   const discoveryLevel = clampInt(options.discoveryLevel, 0, 100, 60);
   const strictExplore = options.strictExplore === true;
   const limit = clampInt(options.limit, 1, 200, 30);
   const perQuery = clampInt(options.perQuery, 1, 50, 10);
-  const maxPerArtist = clampInt(
+  let maxPerArtist = clampInt(
     options.maxPerArtist,
     1,
     10,
     discoveryLevel >= 70 ? 2 : 3
   );
+  const likedProfilePromise = loadLikedProfile(client);
+  const seedTrack = seedSong ? await resolveSeedTrack(client, seedSong) : null;
+  if (seedTrack) {
+    maxPerArtist = Math.min(maxPerArtist, discoveryLevel >= 65 ? 1 : 2);
+  }
 
   const queries = buildSearchQueries({
     prompt,
     artists: artistList,
     genres: genreList,
+    seedTrack,
     maxQueries: Number(options.maxQueries || 12),
     discoveryLevel
   });
 
   const promptTokens = tokenize(prompt);
-  const likedProfilePromise = loadLikedProfile(client);
   const candidateMap = new Map();
-  const candidates = [];
+  const upsertCandidate = (track, query, queryKind, { fromSeedRecommendations = false } = {}) => {
+    if (!track?.uri) return;
+    if (!candidateMap.has(track.uri)) {
+      candidateMap.set(track.uri, {
+        track,
+        trace: createTrace()
+      });
+    }
+    const entry = candidateMap.get(track.uri);
+    if ((track.popularity || 0) > (entry.track.popularity || 0)) {
+      entry.track = track;
+    }
+    entry.trace.hits += 1;
+    if (fromSeedRecommendations) {
+      entry.trace.seedRecHits += 1;
+    }
+    if (queryKind?.hasArtist) entry.trace.artistHits += 1;
+    if (queryKind?.hasGenre) entry.trace.genreHits += 1;
+    if (queryKind?.promptHit || (!queryKind?.hasArtist && !queryKind?.hasGenre)) {
+      entry.trace.promptHits += 1;
+    }
+    if (query) {
+      entry.trace.querySet.add(query);
+    }
+  };
+
   for (const query of queries) {
     const queryKind = classifyQuery(query, promptTokens);
     const result = await client.searchTracks(query, perQuery, 0);
     for (const track of result?.tracks?.items || []) {
-      if (!track?.uri) continue;
-      candidates.push(track);
-      if (!candidateMap.has(track.uri)) {
-        candidateMap.set(track.uri, {
-          track,
-          trace: createTrace()
-        });
-      }
-      const entry = candidateMap.get(track.uri);
-      if ((track.popularity || 0) > (entry.track.popularity || 0)) {
-        entry.track = track;
-      }
-      entry.trace.hits += 1;
-      if (queryKind.hasArtist) entry.trace.artistHits += 1;
-      if (queryKind.hasGenre) entry.trace.genreHits += 1;
-      if (queryKind.promptHit || (!queryKind.hasArtist && !queryKind.hasGenre)) {
-        entry.trace.promptHits += 1;
-      }
-      entry.trace.querySet.add(query);
+      upsertCandidate(track, query, queryKind);
     }
+  }
+
+  const seedRecommendations = await fetchSeedSongRecommendations(
+    client,
+    seedTrack,
+    discoveryLevel
+  );
+  for (const track of seedRecommendations) {
+    const queryKind = classifyQuery(
+      `${seedTrack?.artists?.[0]?.name || ""} ${seedTrack?.name || ""}`.trim(),
+      promptTokens
+    );
+    upsertCandidate(track, "seed-recommendations", queryKind, {
+      fromSeedRecommendations: true
+    });
   }
 
   const deduped = Array.from(candidateMap.values()).map((entry) => entry.track);
@@ -627,6 +805,13 @@ export async function buildTrackSelection(client, options) {
     Array.from(candidateMap.entries()).map(([uri, value]) => [uri, value.trace])
   );
   const likedProfile = await likedProfilePromise;
+  const seedTrackArtistsLower = (seedTrack?.artists || [])
+    .map((artist) => String(artist?.name || "").trim().toLowerCase())
+    .filter(Boolean);
+  const seedTrackTokens = createTokenSet([
+    seedTrack?.name || "",
+    ...(seedTrack?.artists || []).map((artist) => artist.name || "")
+  ]);
   const context = {
     promptTokens,
     artistSeedsLower: artistList.map((artist) => artist.toLowerCase()),
@@ -635,6 +820,10 @@ export async function buildTrackSelection(client, options) {
     seedGenreTokens: createTokenSet(genreList),
     likedArtistSet: likedProfile.likedArtistSet,
     likedTokenSet: likedProfile.likedTokenSet,
+    seedTrackUri: seedTrack?.uri || null,
+    seedTrackTitleKey: seedTrack ? canonicalTrackKey(seedTrack) : "",
+    seedTrackArtistSet: new Set(seedTrackArtistsLower),
+    seedTrackTokens,
     allowedTitleHints: buildAllowedTitleHints(promptTokens),
     traceByUri,
     currentYear: new Date().getUTCFullYear(),
@@ -653,6 +842,7 @@ export async function buildTrackSelection(client, options) {
   const corePool = scored.filter(
     (item) =>
       item.seedArtistMatches > 0 ||
+      item.seedRecHits > 0 ||
       item.likedArtistMatches > 0 ||
       item.likedTokenCoverage >= 0.2 ||
       item.queryFamilyCount >= 2 ||
@@ -682,6 +872,7 @@ export async function buildTrackSelection(client, options) {
     queries,
     selected,
     candidates: scored,
+    seedTrack: summarizeSeedTrack(seedTrack),
     tasteProfile: {
       likedTracksAnalyzed: likedProfile.trackCount
     }
@@ -698,8 +889,9 @@ export async function syncPlaylist(client, rawOptions) {
   const isPublic = options.isPublic === true;
   const description = options.description || defaultDescription(prompt);
 
-  const { selected, queries, tasteProfile } = await buildTrackSelection(client, {
+  const { selected, queries, tasteProfile, seedTrack } = await buildTrackSelection(client, {
     prompt,
+    seedSong: options.seedSong,
     artistList: options.artistList || [],
     genreList: options.genreList || [],
     excludeArtistList: options.excludeArtistList || [],
@@ -712,7 +904,11 @@ export async function syncPlaylist(client, rawOptions) {
   });
 
   if (!selected.length) {
-    throw new Error("No tracks found for the given prompt/artists/genres.");
+    throw new Error(
+      options.seedSong
+        ? "No tracks found for that seed song with the current filters. Try a broader prompt or higher discovery."
+        : "No tracks found for the given prompt/artists/genres."
+    );
   }
 
   if (options.dryRun) {
@@ -724,6 +920,7 @@ export async function syncPlaylist(client, rawOptions) {
       isPublic,
       description,
       queries,
+      seedTrack,
       tasteProfile,
       selected
     };
@@ -764,6 +961,7 @@ export async function syncPlaylist(client, rawOptions) {
     prompt,
     mode,
     queries,
+    seedTrack,
     tasteProfile,
     selected,
     added

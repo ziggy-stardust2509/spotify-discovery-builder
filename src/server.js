@@ -541,10 +541,12 @@ function buildSyncOptions(body) {
     body.strictExplore,
     Boolean(preset?.strictExplore)
   );
+  const seedSong = String(body.seedSong || "").trim();
 
   return {
     name: body.name || preset?.name || "AI Playlist",
     prompt: body.prompt || preset?.prompt || "groove-focused discovery",
+    seedSong,
     artistList: mergeUnique([...(preset?.artists || []), ...artistList]),
     genreList: mergeUnique([...(preset?.genres || []), ...genreList]),
     excludeArtistList: mergeUnique(excludeArtistList),

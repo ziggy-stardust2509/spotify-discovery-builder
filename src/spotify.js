@@ -379,6 +379,63 @@ export class SpotifyClient {
     return tracks;
   }
 
+  async getTrack(trackId) {
+    const id = String(trackId || "").trim();
+    if (!id) {
+      throw new Error("Track ID is required.");
+    }
+    return this.api("GET", `/tracks/${id}`, {
+      query: { market: this.searchMarket }
+    });
+  }
+
+  async getRecommendations({
+    seedTracks = [],
+    seedArtists = [],
+    seedGenres = [],
+    limit = 40,
+    minPopularity,
+    maxPopularity
+  } = {}) {
+    const safeLimit = clampInt(limit, { min: 1, max: 100, fallback: 40 });
+    const normalizeSeed = (values) =>
+      values
+        .map((value) => String(value || "").trim())
+        .filter(Boolean)
+        .slice(0, 5)
+        .join(",");
+    const seedTracksParam = normalizeSeed(seedTracks);
+    const seedArtistsParam = normalizeSeed(seedArtists);
+    const seedGenresParam = normalizeSeed(seedGenres);
+    const query = {
+      limit: safeLimit,
+      market: this.searchMarket
+    };
+    if (seedTracksParam) query.seed_tracks = seedTracksParam;
+    if (seedArtistsParam) query.seed_artists = seedArtistsParam;
+    if (seedGenresParam) query.seed_genres = seedGenresParam;
+    if (!seedTracksParam && !seedArtistsParam && !seedGenresParam) {
+      throw new Error("At least one recommendation seed is required.");
+    }
+    if (Number.isFinite(Number(minPopularity))) {
+      query.min_popularity = clampInt(minPopularity, { min: 0, max: 100, fallback: 0 });
+    }
+    if (Number.isFinite(Number(maxPopularity))) {
+      query.max_popularity = clampInt(maxPopularity, { min: 0, max: 100, fallback: 100 });
+    }
+    if (
+      query.min_popularity !== undefined &&
+      query.max_popularity !== undefined &&
+      query.max_popularity < query.min_popularity
+    ) {
+      [query.min_popularity, query.max_popularity] = [
+        query.max_popularity,
+        query.min_popularity
+      ];
+    }
+    return this.api("GET", "/recommendations", { query });
+  }
+
   async searchTracks(q, limit = 20, offset = 0) {
     const safeLimit = clampInt(limit, {
       min: 1,

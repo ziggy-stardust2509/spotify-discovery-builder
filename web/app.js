@@ -46,12 +46,13 @@ const STARTER_VARIANTS = [
   }
 ];
 
-const PREFILL_CLEAR_IDS = ["name", "prompt", "artists", "genres"];
+const PREFILL_CLEAR_IDS = ["name", "seedSong", "prompt", "artists", "genres"];
 
 const els = {
   form: document.querySelector("#sync-form"),
   preset: document.querySelector("#preset"),
   name: document.querySelector("#name"),
+  seedSong: document.querySelector("#seedSong"),
   prompt: document.querySelector("#prompt"),
   artists: document.querySelector("#artists"),
   genres: document.querySelector("#genres"),
@@ -291,6 +292,7 @@ function applyPresetToForm(name) {
   if (!preset) return;
 
   els.name.value = preset.name || "";
+  els.seedSong.value = "";
   els.prompt.value = preset.prompt || "";
   els.artists.value = (preset.artists || []).join(", ");
   els.genres.value = (preset.genres || []).join(", ");
@@ -319,6 +321,7 @@ function applyRandomStarterPrefill() {
   if (!starter) return;
   els.preset.value = "";
   markPrefilledValue(els.name, starter.name || "");
+  markPrefilledValue(els.seedSong, "");
   markPrefilledValue(els.prompt, starter.prompt || "");
   markPrefilledValue(els.artists, starter.artists || "");
   markPrefilledValue(els.genres, starter.genres || "");
@@ -483,6 +486,12 @@ function renderResult(result) {
   if (Number.isFinite(Number(result.tasteProfile?.likedTracksAnalyzed))) {
     summaryBits.push(`Liked tracks analyzed: ${Number(result.tasteProfile.likedTracksAnalyzed)}`);
   }
+  if (result.seedTrack?.name) {
+    const seedArtists = Array.isArray(result.seedTrack.artists)
+      ? result.seedTrack.artists.join(", ")
+      : "";
+    summaryBits.push(`Seed: ${result.seedTrack.name}${seedArtists ? ` (${seedArtists})` : ""}`);
+  }
   els.resultSummary.textContent = summaryBits.join(" | ");
   if (result.playlistUrl) {
     els.resultSummary.append(document.createTextNode(" | Spotify: "));
@@ -521,6 +530,7 @@ async function submitForm(event) {
   const payload = {
     preset: els.preset.value || undefined,
     name: els.name.value.trim(),
+    seedSong: els.seedSong.value.trim(),
     prompt: els.prompt.value.trim(),
     artists: els.artists.value.trim(),
     genres: els.genres.value.trim(),
@@ -559,6 +569,7 @@ function init() {
   ensureSessionId();
   updateAuthLinks();
   bindPrefillClearOnType(els.name);
+  bindPrefillClearOnType(els.seedSong);
   bindPrefillClearOnType(els.prompt);
   bindPrefillClearOnType(els.artists);
   bindPrefillClearOnType(els.genres);

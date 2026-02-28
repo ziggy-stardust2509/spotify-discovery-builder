@@ -1,6 +1,6 @@
 # Spotify AI Playlist Manager (Web App)
 
-Web app to create and update Spotify playlists from prompts, artists, and genres.
+Web app to create and update Spotify playlists from prompts, artists, genres, and seed songs.
 
 ## What it does
 
@@ -14,6 +14,9 @@ Web app to create and update Spotify playlists from prompts, artists, and genres
   - update existing playlist with same name, or
   - force create a new playlist each run
 - Updates playlists in `replace` or `append` mode.
+- Seed-song mode:
+  - start from one song (name, URL, or URI)
+  - expands with diversified recommendations instead of repeating the same obvious tracks
 - Supports presets:
   - `drumming`
   - `discovery`
@@ -116,4 +119,5 @@ See [DEPLOY_FERAL.md](DEPLOY_FERAL.md) for deployment steps.
 ```bash
 npm run auth
 npm run sync -- --preset drumming
+npm run sync -- --seed-song "https://open.spotify.com/track/..." --name "Off One Song" --prompt "left-field groove, modern rhythm section"
 ```

@@ -63,6 +63,7 @@ Commands:
 sync options:
   --preset <drumming|discovery|gym>
   --name <playlist name>
+  --seed-song <track name|spotify url|spotify uri>
   --prompt <description of vibe/style>
   --artists "Artist A,Artist B"
   --genres "genre1,genre2"
@@ -107,6 +108,7 @@ async function runSync(args) {
 
   const options = {
     name: args.name || preset?.name || "AI Playlist",
+    seedSong: args["seed-song"] || args.song || "",
     prompt: args.prompt || preset?.prompt || "groove-focused discovery",
     artistList: [...(preset?.artists || []), ...artistList],
     genreList: [...(preset?.genres || []), ...genreList],
@@ -125,6 +127,10 @@ async function runSync(args) {
   console.log(`Prompt: ${result.prompt}`);
   console.log(`Mode: ${result.mode}`);
   console.log(`Queries used: ${result.queries.join(" | ")}`);
+  if (result.seedTrack?.name) {
+    const seedArtists = (result.seedTrack.artists || []).join(", ");
+    console.log(`Seed track used: ${result.seedTrack.name}${seedArtists ? ` - ${seedArtists}` : ""}`);
+  }
 
   if (result.dryRun) {
     console.log("\nDry run only (no Spotify writes).");
