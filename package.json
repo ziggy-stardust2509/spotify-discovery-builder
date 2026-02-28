@@ -1,0 +1,19 @@
+{
+  "name": "spotify-playlist-manager",
+  "version": "0.1.0",
+  "description": "AI-assisted Spotify playlist creation and updates from the command line.",
+  "type": "module",
+  "main": "src/cli.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "auth": "node src/cli.js auth",
+    "sync": "node src/cli.js sync",
+    "check": "node --check src/cli.js && node --check src/server.js && node --check src/spotify.js && node --check src/playlistManager.js && node --check web/app.js"
+  },
+  "engines": {
+    "node": ">=16"
+  },
+  "dependencies": {
+    "node-fetch": "^3.3.2"
+  }
+}

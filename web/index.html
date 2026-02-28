@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Spotify Discovery Playlist Builder</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="bg-orb orb-one"></div>
+    <div class="bg-orb orb-two"></div>
+
+    <main class="layout">
+      <section class="hero panel reveal">
+        <p class="kicker">Escape The Spotify Bubble</p>
+        <h1>Build Playlists That Discover New Ground</h1>
+        <p class="hero-copy">
+          Start from what you already like, then control how far the system explores beyond your usual feed.
+          The goal: better personalization without repeating the same algorithm loop.
+        </p>
+        <div class="hero-highlights">
+          <span class="tag">Customization first</span>
+          <span class="tag">Discovery depth control</span>
+          <span class="tag">Less same-song repetition</span>
+        </div>
+      </section>
+
+      <section class="panel reveal delay-1">
+        <div class="panel-header">
+          <h2>Step 1: Connect Spotify</h2>
+          <span id="status-pill" class="pill neutral">Checking</span>
+        </div>
+        <p class="section-subtitle">Most people only need one click to connect.</p>
+        <div class="auth-cta">
+          <a id="connect-link" class="btn btn-authorize" href="/auth/login">Authorize Spotify</a>
+          <p class="auth-cta-note">Secure Spotify login. You return here automatically.</p>
+        </div>
+        <div class="actions secondary-actions">
+          <button id="refresh-status" class="btn btn-ghost" type="button">Check Connection</button>
+          <a id="disconnect-link" class="btn btn-ghost" href="/auth/logout">Sign Out</a>
+        </div>
+        <p id="status-text">Loading Spotify status...</p>
+
+        <details id="advanced-credentials" class="help-box optional-box">
+          <summary>Optional: Use your own Spotify app keys</summary>
+          <form id="client-config-form">
+            <p class="helper-copy">Skip this unless you want custom credentials for this browser session.</p>
+            <div class="grid two">
+              <label>
+                Spotify Client ID
+                <input id="clientId" name="clientId" autocomplete="off" required />
+              </label>
+              <label>
+                Auth Mode
+                <select id="authMode" name="authMode">
+                  <option value="pkce">PKCE (Recommended)</option>
+                  <option value="standard">Standard (Client Secret)</option>
+                </select>
+              </label>
+            </div>
+            <label>
+              Spotify Client Secret
+              <input id="clientSecret" name="clientSecret" type="password" autocomplete="off" />
+            </label>
+            <p id="client-config-note">Using server defaults unless you save overrides.</p>
+            <details class="help-box">
+              <summary>How to create a Spotify Developer app</summary>
+              <ol class="help-list">
+                <li>
+                  Open
+                  <a href="https://developer.spotify.com/dashboard" target="_blank" rel="noreferrer">
+                    developer.spotify.com/dashboard
+                  </a>
+                  and sign in.
+                </li>
+                <li>Create app and give it any name/description.</li>
+                <li>
+                  Add this Redirect URI in app settings:
+                  <code id="callback-uri">https://your-host/callback</code>
+                </li>
+                <li>For public hosting, redirect URI must use HTTPS (not HTTP).</li>
+              </ol>
+            </details>
+            <div class="actions credential-actions">
+              <button id="save-client-config" class="btn btn-ghost" type="submit">Save App Keys</button>
+              <button id="clear-client-config" class="btn btn-ghost" type="button">Reset To Defaults</button>
+            </div>
+          </form>
+        </details>
+      </section>
+
+      <section class="panel reveal delay-2">
+        <div class="panel-header">
+          <h2>Step 2: Customize Playlist</h2>
+        </div>
+        <p class="section-subtitle">
+          Define your taste, then tune how aggressively to explore outside your usual recommendations.
+        </p>
+        <form id="sync-form">
+          <div class="grid two">
+            <label>
+              Quick-start template
+              <select id="preset" name="preset">
+                <option value="">Custom</option>
+              </select>
+            </label>
+            <label>
+              Playlist Name
+              <input id="name" name="name" required />
+            </label>
+          </div>
+
+          <label>
+            Vibe / intent
+            <textarea
+              id="prompt"
+              name="prompt"
+              rows="3"
+              placeholder="elastic pocket grooves, broken-beat fusion, dusty hip hop rhythm sections"
+              required
+            ></textarea>
+          </label>
+
+          <div class="grid two">
+            <label>
+              Seed artists (comma-separated)
+              <input id="artists" name="artists" placeholder="Snarky Puppy, Anderson .Paak" />
+            </label>
+            <label>
+              Seed genres (comma-separated)
+              <input id="genres" name="genres" placeholder="funk, jazz fusion, hip hop" />
+            </label>
+          </div>
+          <p class="builder-tip">
+            Tip: raise discovery and lower tracks-per-artist to break out of repetitive Spotify suggestions.
+          </p>
+
+          <div class="focus-box">
+            <div class="panel-header compact">
+              <h3>Discovery Engine</h3>
+              <span id="discovery-level-badge" class="pill neutral">Balanced Mix</span>
+            </div>
+            <label class="stack">
+              How far outside your bubble should this build go?
+              <input
+                id="discoveryLevel"
+                name="discoveryLevel"
+                type="range"
+                min="0"
+                max="100"
+                step="5"
+                value="70"
+              />
+              <div class="slider-row">
+                <span>In your lane</span>
+                <span id="discovery-level-text">Balanced discovery</span>
+                <span>Outside bubble</span>
+              </div>
+            </label>
+            <div class="grid two">
+              <label>
+                Max tracks per artist
+                <input
+                  id="maxPerArtist"
+                  name="maxPerArtist"
+                  type="number"
+                  min="1"
+                  max="10"
+                  value="2"
+                />
+              </label>
+              <label>
+                Exclude artists (comma-separated)
+                <input
+                  id="excludeArtists"
+                  name="excludeArtists"
+                  placeholder="Artist names you do not want in results"
+                />
+              </label>
+            </div>
+            <label class="checkbox">
+              <input id="strictExplore" name="strictExplore" type="checkbox" />
+              Hard explore mode (exclude seed artists from final picks)
+            </label>
+          </div>
+
+          <details class="help-box">
+            <summary>Advanced behavior</summary>
+            <div class="grid three advanced-grid">
+              <label>
+                Limit
+                <input id="limit" name="limit" type="number" min="1" max="100" value="40" />
+              </label>
+              <label>
+                Mode
+                <select id="mode" name="mode">
+                  <option value="replace">Replace</option>
+                  <option value="append">Append</option>
+                </select>
+              </label>
+              <label>
+                If playlist name already exists
+                <select id="reuseExisting" name="reuseExisting">
+                  <option value="true">Update existing playlist</option>
+                  <option value="false">Create a new playlist</option>
+                </select>
+              </label>
+              <label>
+                Public Playlist
+                <select id="isPublic" name="isPublic">
+                  <option value="false">No</option>
+                  <option value="true">Yes</option>
+                </select>
+              </label>
+            </div>
+
+            <label>
+              Description (optional)
+              <input id="description" name="description" />
+            </label>
+
+            <label class="checkbox">
+              <input id="dryRun" name="dryRun" type="checkbox" />
+              Dry run only (preview tracks, no Spotify changes)
+            </label>
+          </details>
+
+          <button id="submit-btn" class="btn btn-primary" type="submit">Generate Playlist</button>
+        </form>
+      </section>
+
+      <section class="panel reveal delay-3">
+        <div class="panel-header">
+          <h2>Step 3: Review & Open</h2>
+        </div>
+        <p id="result-summary">Run your first build to preview fresh recommendations.</p>
+        <ul id="track-list" class="tracks"></ul>
+      </section>
+    </main>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
