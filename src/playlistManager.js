@@ -54,6 +54,7 @@ const TITLE_NOISE_HINTS = [
 ];
 
 const EXCLUDED_TITLE_HINTS = ["karaoke", "tribute", "8d", "nightcore"];
+const LOW_INTENT_TITLE_HINTS = ["interlude", "skit", "intro", "outro", "snippet", "demo"];
 
 const TITLE_HINT_ALLOWLIST = ["live", "instrumental", "remix", "edit", "acoustic"];
 
@@ -105,6 +106,14 @@ function tokenize(text) {
     .filter((token) => token && token.length > 2 && !STOPWORDS.has(token));
 }
 
+function tokenizeLoose(text) {
+  return String(text || "")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/g)
+    .map((token) => token.trim())
+    .filter((token) => token && token.length > 2);
+}
+
 function normalizeCsv(input) {
   if (!input) return [];
   return input
@@ -137,6 +146,81 @@ function stableRandomFromString(input) {
     hash = Math.imul(hash, 16777619);
   }
   return (hash >>> 0) / 4294967295;
+}
+
+function createTokenSet(values = []) {
+  const set = new Set();
+  for (const value of values) {
+    for (const token of tokenizeLoose(value)) {
+      if (STOPWORDS.has(token)) continue;
+      if (!isHighSignalToken(token)) continue;
+      set.add(token);
+    }
+  }
+  return set;
+}
+
+function countTokenSetMatches(haystackTokens, tokenSet) {
+  if (!haystackTokens?.size || !tokenSet?.size) return 0;
+  let matches = 0;
+  for (const token of tokenSet) {
+    if (haystackTokens.has(token)) matches += 1;
+  }
+  return matches;
+}
+
+function buildLikedProfile(tracks = []) {
+  const artistCount = new Map();
+  const tokenCount = new Map();
+  let trackCount = 0;
+
+  for (const track of tracks) {
+    if (!track?.uri) continue;
+    trackCount += 1;
+    const artists = track.artists || [];
+    for (const artist of artists) {
+      const key = String(artist?.name || "").trim().toLowerCase();
+      if (!key) continue;
+      artistCount.set(key, (artistCount.get(key) || 0) + 1);
+    }
+    const haystack = [track.name || "", track.album?.name || "", ...artists.map((a) => a.name || "")]
+      .join(" ")
+      .toLowerCase();
+    for (const token of tokenizeLoose(haystack)) {
+      if (STOPWORDS.has(token)) continue;
+      if (!isHighSignalToken(token)) continue;
+      tokenCount.set(token, (tokenCount.get(token) || 0) + 1);
+    }
+  }
+
+  const likedArtistSet = new Set(
+    Array.from(artistCount.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 70)
+      .map(([name]) => name)
+  );
+
+  const likedTokenSet = new Set(
+    Array.from(tokenCount.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 100)
+      .map(([token]) => token)
+  );
+
+  return {
+    trackCount,
+    likedArtistSet,
+    likedTokenSet
+  };
+}
+
+async function loadLikedProfile(client) {
+  try {
+    const likedTracks = await client.getSavedTracks({ pageLimit: 4, pageSize: 50 });
+    return buildLikedProfile(likedTracks);
+  } catch {
+    return buildLikedProfile([]);
+  }
 }
 
 function isHighSignalToken(token) {
@@ -239,6 +323,16 @@ function buildSearchQueries({
     }
   }
 
+  for (const artist of artists.slice(0, 2)) {
+    for (const genre of genres.slice(0, 2)) {
+      if (set.size >= maxQueries) break;
+      set.add(`artist:"${artist}" genre:"${genre}"`);
+      if (promptTokens.length && novelty < 0.8) {
+        set.add(`artist:"${artist}" genre:"${genre}" ${promptTokens.slice(0, 2).join(" ")}`);
+      }
+    }
+  }
+
   if (promptTokens.length) {
     set.add(promptTokens.slice(0, 6).join(" "));
     for (let i = 0; i < promptTokens.length - 1 && set.size < maxQueries; i += 1) {
@@ -284,6 +378,14 @@ function trackShouldBeExcluded(track, context) {
       return true;
     }
   }
+  const durationMs = Number(track.duration_ms || 0);
+  if (durationMs > 0 && durationMs < 95_000) {
+    for (const hint of LOW_INTENT_TITLE_HINTS) {
+      if (normalizedTitle.includes(hint)) {
+        return true;
+      }
+    }
+  }
   return false;
 }
 
@@ -298,6 +400,7 @@ function scoreTrack(track, context) {
     .toLowerCase();
   const trace = context.traceByUri.get(track.uri) || createTrace();
   const title = normalizeTrackTitle(track.name || "");
+  const haystackTokens = new Set(tokenizeLoose(haystack));
 
   const novelty = clamp01(context.discoveryLevel / 100);
   const familiarity = 1 - novelty;
@@ -315,20 +418,50 @@ function scoreTrack(track, context) {
     if (artistNames.some((name) => name.includes(artist))) return count + 1;
     return count;
   }, 0);
+  const likedArtistMatches = artistNames.reduce((count, artist) => {
+    if (context.likedArtistSet.has(artist)) return count + 1;
+    return count;
+  }, 0);
+  const seedArtistTokenMatches = countTokenSetMatches(haystackTokens, context.seedArtistTokens);
+  const seedGenreTokenMatches = countTokenSetMatches(haystackTokens, context.seedGenreTokens);
+  const likedTokenMatches = countTokenSetMatches(haystackTokens, context.likedTokenSet);
+  const likedTokenCoverage = context.likedTokenSet.size
+    ? likedTokenMatches / Math.min(14, context.likedTokenSet.size)
+    : 0;
+
+  const confidence =
+    queryFamilyCount * 0.7 +
+    Math.min(4, trace.hits) * 0.34 +
+    promptCoverage * 1.8 +
+    seedArtistMatches * (1 + 0.8 * familiarity) +
+    likedArtistMatches * (0.55 + 0.75 * familiarity) +
+    likedTokenCoverage * (0.55 + 0.85 * familiarity) +
+    seedArtistTokenMatches * (0.32 + 0.22 * familiarity) +
+    seedGenreTokenMatches * (0.22 + 0.2 * novelty);
 
   let score = popularity * (0.45 + 0.45 * familiarity);
   score += (1 - popularity) * (0.3 + 0.85 * novelty);
   score += queryAgreement * 0.55;
   score += queryFamilyCount * (0.34 + 0.08 * novelty);
-  score += promptMatches * (0.09 + 0.05 * familiarity);
-  score += promptCoverage * 0.75;
+  score += promptMatches * (0.16 + 0.08 * familiarity);
+  score += promptCoverage * 1.25;
 
   score += seedArtistMatches * (1.5 * familiarity);
   score -= seedArtistMatches * (0.95 * novelty);
+  score += likedArtistMatches * (0.52 + 0.6 * familiarity);
+  score += likedTokenCoverage * (0.5 + 0.6 * familiarity);
+  score += seedArtistTokenMatches * (0.24 + 0.12 * familiarity);
+  score += seedGenreTokenMatches * (0.1 + 0.16 * novelty);
+  score += confidence * (0.24 + 0.2 * familiarity);
 
   for (const hint of TITLE_NOISE_HINTS) {
     if (title.includes(hint) && !context.allowedTitleHints.has(hint)) {
       score -= 0.22;
+    }
+  }
+  for (const hint of LOW_INTENT_TITLE_HINTS) {
+    if (title.includes(hint) && !context.allowedTitleHints.has(hint)) {
+      score -= 0.28;
     }
   }
 
@@ -346,22 +479,51 @@ function scoreTrack(track, context) {
 
   if (track.explicit === false) score += 0.03;
   const randomNudge = stableRandomFromString(track.id || track.uri || track.name || "");
-  score += randomNudge * (0.14 * novelty);
-  return score;
+  score += randomNudge * (0.06 * novelty);
+
+  const minConfidence = 0.85 + (1 - novelty) * 0.55;
+  if (confidence < minConfidence) {
+    score -= (minConfidence - confidence) * (0.95 + 1.1 * familiarity);
+  }
+
+  return {
+    score,
+    confidence,
+    promptCoverage,
+    queryFamilyCount,
+    seedArtistMatches,
+    likedArtistMatches,
+    likedTokenCoverage
+  };
 }
 
 function selectWithDiversity(
   scored,
   limit,
   maxPerArtist,
-  { maxPerAlbum = 2, dedupeTitle = true } = {}
+  { maxPerAlbum = 2, dedupeTitle = true, seedSelection = [] } = {}
 ) {
-  const selected = [];
+  const selected = seedSelection.slice(0, limit);
+  const selectedUris = new Set(selected.map((track) => track.uri).filter(Boolean));
   const byArtist = new Map();
   const byAlbum = new Map();
   const byTitle = new Set();
 
+  for (const track of selected) {
+    const primaryArtist = track.artists?.[0]?.id || track.artists?.[0]?.name;
+    const albumKey = track.album?.id || track.album?.name || track.uri;
+    const titleKey = canonicalTrackKey(track);
+    byArtist.set(primaryArtist, (byArtist.get(primaryArtist) || 0) + 1);
+    byAlbum.set(albumKey, (byAlbum.get(albumKey) || 0) + 1);
+    if (titleKey) byTitle.add(titleKey);
+  }
+
+  if (selected.length >= limit) {
+    return selected.slice(0, limit);
+  }
+
   for (const item of scored) {
+    if (selectedUris.has(item.track.uri)) continue;
     const primaryArtist = item.track.artists?.[0]?.id || item.track.artists?.[0]?.name;
     const albumKey = item.track.album?.id || item.track.album?.name || item.track.uri;
     const titleKey = canonicalTrackKey(item.track);
@@ -371,6 +533,7 @@ function selectWithDiversity(
     if (albumCount >= maxPerAlbum) continue;
     if (dedupeTitle && titleKey && byTitle.has(titleKey)) continue;
     selected.push(item.track);
+    if (item.track.uri) selectedUris.add(item.track.uri);
     byArtist.set(primaryArtist, count + 1);
     byAlbum.set(albumKey, albumCount + 1);
     if (titleKey) byTitle.add(titleKey);
@@ -379,10 +542,11 @@ function selectWithDiversity(
 
   for (const item of scored) {
     if (selected.length >= limit) break;
+    if (selectedUris.has(item.track.uri)) continue;
     const titleKey = canonicalTrackKey(item.track);
     if (dedupeTitle && titleKey && byTitle.has(titleKey)) continue;
-    if (selected.some((track) => track.uri === item.track.uri)) continue;
     selected.push(item.track);
+    if (item.track.uri) selectedUris.add(item.track.uri);
     if (titleKey) byTitle.add(titleKey);
   }
 
@@ -429,6 +593,7 @@ export async function buildTrackSelection(client, options) {
   });
 
   const promptTokens = tokenize(prompt);
+  const likedProfilePromise = loadLikedProfile(client);
   const candidateMap = new Map();
   const candidates = [];
   for (const query of queries) {
@@ -461,10 +626,15 @@ export async function buildTrackSelection(client, options) {
   const traceByUri = new Map(
     Array.from(candidateMap.entries()).map(([uri, value]) => [uri, value.trace])
   );
+  const likedProfile = await likedProfilePromise;
   const context = {
     promptTokens,
     artistSeedsLower: artistList.map((artist) => artist.toLowerCase()),
     excludeArtistTokens: excludeArtistList.map((artist) => artist.toLowerCase()),
+    seedArtistTokens: createTokenSet(artistList),
+    seedGenreTokens: createTokenSet(genreList),
+    likedArtistSet: likedProfile.likedArtistSet,
+    likedTokenSet: likedProfile.likedTokenSet,
     allowedTitleHints: buildAllowedTitleHints(promptTokens),
     traceByUri,
     currentYear: new Date().getUTCFullYear(),
@@ -474,14 +644,48 @@ export async function buildTrackSelection(client, options) {
 
   const scored = deduped
     .filter((track) => !trackShouldBeExcluded(track, context))
-    .map((track) => ({ track, score: scoreTrack(track, context) }))
+    .map((track) => ({ track, ...scoreTrack(track, context) }))
     .sort((a, b) => b.score - a.score);
 
-  const selected = selectWithDiversity(scored, limit, maxPerArtist, {
+  const novelty = clamp01(discoveryLevel / 100);
+  const basePromptThreshold = 0.19 - 0.06 * novelty;
+  const confidenceThreshold = 1.2 - 0.35 * novelty;
+  const corePool = scored.filter(
+    (item) =>
+      item.seedArtistMatches > 0 ||
+      item.likedArtistMatches > 0 ||
+      item.likedTokenCoverage >= 0.2 ||
+      item.queryFamilyCount >= 2 ||
+      item.promptCoverage >= basePromptThreshold ||
+      item.confidence >= confidenceThreshold
+  );
+  const coreRatio = strictExplore
+    ? 0.5 - 0.2 * novelty
+    : 0.8 - 0.45 * novelty;
+  const coreTarget = clampInt(
+    Math.round(limit * clamp01(coreRatio)),
+    1,
+    limit,
+    Math.max(1, Math.round(limit * 0.6))
+  );
+
+  const diversityOptions = {
     maxPerAlbum: discoveryLevel >= 70 ? 1 : 2,
     dedupeTitle: true
+  };
+  const coreSelected = selectWithDiversity(corePool, coreTarget, maxPerArtist, diversityOptions);
+  const selected = selectWithDiversity(scored, limit, maxPerArtist, {
+    ...diversityOptions,
+    seedSelection: coreSelected
   });
-  return { queries, selected, candidates: scored };
+  return {
+    queries,
+    selected,
+    candidates: scored,
+    tasteProfile: {
+      likedTracksAnalyzed: likedProfile.trackCount
+    }
+  };
 }
 
 export async function syncPlaylist(client, rawOptions) {
@@ -494,7 +698,7 @@ export async function syncPlaylist(client, rawOptions) {
   const isPublic = options.isPublic === true;
   const description = options.description || defaultDescription(prompt);
 
-  const { selected, queries } = await buildTrackSelection(client, {
+  const { selected, queries, tasteProfile } = await buildTrackSelection(client, {
     prompt,
     artistList: options.artistList || [],
     genreList: options.genreList || [],
@@ -520,6 +724,7 @@ export async function syncPlaylist(client, rawOptions) {
       isPublic,
       description,
       queries,
+      tasteProfile,
       selected
     };
   }
@@ -559,6 +764,7 @@ export async function syncPlaylist(client, rawOptions) {
     prompt,
     mode,
     queries,
+    tasteProfile,
     selected,
     added
   };

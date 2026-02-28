@@ -63,6 +63,7 @@ export function getConfig() {
       process.env.SPOTIFY_SCOPES ||
       [
         "user-read-private",
+        "user-library-read",
         "playlist-modify-public",
         "playlist-modify-private",
         "playlist-read-private"

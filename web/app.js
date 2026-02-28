@@ -480,6 +480,9 @@ function renderResult(result) {
         : "Created new",
     result.dryRun ? `Preview tracks: ${(result.selected || []).length}` : `Tracks written: ${result.added ?? 0}`
   ];
+  if (Number.isFinite(Number(result.tasteProfile?.likedTracksAnalyzed))) {
+    summaryBits.push(`Liked tracks analyzed: ${Number(result.tasteProfile.likedTracksAnalyzed)}`);
+  }
   els.resultSummary.textContent = summaryBits.join(" | ");
   if (result.playlistUrl) {
     els.resultSummary.append(document.createTextNode(" | Spotify: "));

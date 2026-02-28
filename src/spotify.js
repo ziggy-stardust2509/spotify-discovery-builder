@@ -354,6 +354,31 @@ export class SpotifyClient {
     return this.api("GET", "/me");
   }
 
+  async getSavedTracks({ pageLimit = 4, pageSize = 50 } = {}) {
+    const safePageSize = clampInt(pageSize, { min: 1, max: 50, fallback: 50 });
+    const safePageLimit = clampInt(pageLimit, { min: 1, max: 20, fallback: 4 });
+    const tracks = [];
+    let offset = 0;
+    for (let page = 0; page < safePageLimit; page += 1) {
+      const result = await this.api("GET", "/me/tracks", {
+        query: {
+          limit: safePageSize,
+          offset,
+          market: this.searchMarket
+        }
+      });
+      const items = result?.items || [];
+      for (const item of items) {
+        if (item?.track?.uri) {
+          tracks.push(item.track);
+        }
+      }
+      if (!result?.next) break;
+      offset += safePageSize;
+    }
+    return tracks;
+  }
+
   async searchTracks(q, limit = 20, offset = 0) {
     const safeLimit = clampInt(limit, {
       min: 1,
