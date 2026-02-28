@@ -3,49 +3,6 @@ const state = {
   sessionId: null
 };
 
-const STARTER_VARIANTS = [
-  {
-    name: "Future Pocket Explorer",
-    prompt: "off-grid grooves, futuristic rhythm section, jazz-electronic hybrids, heavy pocket",
-    artists: "Yussef Dayes, BADBADNOTGOOD, Tennyson",
-    genres: "jazz fusion, broken beat, electronic",
-    discoveryLevel: 75,
-    maxPerArtist: 2
-  },
-  {
-    name: "Late Night Rhythm Lab",
-    prompt: "moody low-end, head-nod drums, neo-soul textures, left-field beat science",
-    artists: "Thundercat, Hiatus Kaiyote, KAYTRANADA",
-    genres: "neo soul, alternative hip hop, future beats",
-    discoveryLevel: 70,
-    maxPerArtist: 2
-  },
-  {
-    name: "Alt Groove Signal",
-    prompt: "tight live drums, genre-blend momentum, punchy basslines, adventurous groove writing",
-    artists: "Anderson .Paak, Vulfpeck, The Comet Is Coming",
-    genres: "funk, jazz fusion, indie soul",
-    discoveryLevel: 68,
-    maxPerArtist: 3
-  },
-  {
-    name: "Uncharted Bounce",
-    prompt: "restless percussive movement, creative syncopation, global rhythm influence, modern production",
-    artists: "Sango, Ezra Collective, Alfa Mist",
-    genres: "broken beat, jazz rap, afrobeat",
-    discoveryLevel: 82,
-    maxPerArtist: 2
-  },
-  {
-    name: "Underground Motion",
-    prompt: "driving drums, gritty textures, kinetic build-ups, club-ready energy without pop repetition",
-    artists: "Overmono, Floating Points, Four Tet",
-    genres: "electronic, UK garage, drum and bass",
-    discoveryLevel: 77,
-    maxPerArtist: 2
-  }
-];
-
 const PREFILL_CLEAR_IDS = ["name", "seedSong", "prompt", "artists", "genres"];
 
 const els = {
@@ -90,17 +47,6 @@ const els = {
 function parseIntOr(value, fallback) {
   const parsed = Number.parseInt(String(value ?? ""), 10);
   return Number.isFinite(parsed) ? parsed : fallback;
-}
-
-function randomItem(items) {
-  if (!Array.isArray(items) || !items.length) return null;
-  return items[Math.floor(Math.random() * items.length)] || null;
-}
-
-function markPrefilledValue(element, value) {
-  if (!element) return;
-  element.value = value;
-  element.dataset.prefilled = "true";
 }
 
 function clearPrefillFlag(element) {
@@ -316,18 +262,22 @@ function applyPresetToForm(name) {
   updateDiscoveryUI();
 }
 
-function applyRandomStarterPrefill() {
-  const starter = randomItem(STARTER_VARIANTS);
-  if (!starter) return;
-  els.preset.value = "";
-  markPrefilledValue(els.name, starter.name || "");
-  markPrefilledValue(els.seedSong, "");
-  markPrefilledValue(els.prompt, starter.prompt || "");
-  markPrefilledValue(els.artists, starter.artists || "");
-  markPrefilledValue(els.genres, starter.genres || "");
-  els.discoveryLevel.value = String(parseIntOr(starter.discoveryLevel, 70));
-  els.maxPerArtist.value = String(parseIntOr(starter.maxPerArtist, 2));
-  updateDiscoveryUI();
+function clearCustomTemplateTextFields() {
+  const textFieldIds = [
+    "name",
+    "seedSong",
+    "prompt",
+    "artists",
+    "genres",
+    "excludeArtists",
+    "description"
+  ];
+  for (const id of textFieldIds) {
+    const element = els[id];
+    if (!element) continue;
+    element.value = "";
+    clearPrefillFlag(element);
+  }
 }
 
 async function loadPresets() {
@@ -577,7 +527,11 @@ function init() {
     els.callbackUri.textContent = `${window.location.origin}/callback`;
   }
   els.preset.addEventListener("change", () => {
-    if (!els.preset.value) return;
+    if (!els.preset.value) {
+      clearCustomTemplateTextFields();
+      clearStarterPrefillFlags();
+      return;
+    }
     applyPresetToForm(els.preset.value);
   });
   els.form.addEventListener("submit", submitForm);
@@ -599,9 +553,6 @@ function init() {
       }
       if (loggedOut === "1") {
         els.resultSummary.textContent = "Spotify session disconnected for this browser.";
-      }
-      if (!els.name.value) {
-        applyRandomStarterPrefill();
       }
       updateDiscoveryUI();
       return loadStatus();
