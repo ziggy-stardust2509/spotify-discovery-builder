@@ -36,21 +36,28 @@
           <h2>Step 1: Connect Spotify</h2>
           <span id="status-pill" class="pill neutral">Checking</span>
         </div>
-        <p class="section-subtitle">Most people only need one click to connect.</p>
+        <p class="section-subtitle">Most people only need one click. No personal API key required.</p>
         <div class="auth-cta">
           <a id="connect-link" class="btn btn-authorize" href="/auth/login">Authorize Spotify</a>
           <p class="auth-cta-note">Secure Spotify login. You return here automatically.</p>
         </div>
+        <p class="helper-copy">
+          If Spotify says your account is not allowed, ask the app owner to add you in Spotify Dashboard
+          <strong>Users and Access</strong>, or use your own app keys below.
+        </p>
         <div class="actions secondary-actions">
+          <button id="use-hosted-defaults" class="btn btn-ghost" type="button">Use Hosted App (No Keys)</button>
           <button id="refresh-status" class="btn btn-ghost" type="button">Check Connection</button>
           <a id="disconnect-link" class="btn btn-ghost" href="/auth/logout">Sign Out</a>
         </div>
         <p id="status-text">Loading Spotify status...</p>
 
         <details id="advanced-credentials" class="help-box optional-box">
-          <summary>Optional: Use your own Spotify app keys</summary>
+          <summary>Optional fallback: Use your own Spotify Developer app</summary>
           <form id="client-config-form">
-            <p class="helper-copy">Skip this unless you want custom credentials for this browser session.</p>
+            <p class="helper-copy">
+              Only use this if hosted app auth is blocked for your account, or you prefer your own Spotify app.
+            </p>
             <div class="grid two">
               <label>
                 Spotify Client ID
@@ -88,7 +95,7 @@
               </ol>
             </details>
             <div class="actions credential-actions">
-              <button id="save-client-config" class="btn btn-ghost" type="submit">Save App Keys</button>
+              <button id="save-client-config" class="btn btn-ghost" type="submit">Save My App Keys</button>
               <button id="clear-client-config" class="btn btn-ghost" type="button">Reset To Defaults</button>
             </div>
           </form>

@@ -35,6 +35,7 @@ const els = {
   clientConfigNote: document.querySelector("#client-config-note"),
   saveClientConfig: document.querySelector("#save-client-config"),
   clearClientConfig: document.querySelector("#clear-client-config"),
+  useHostedDefaults: document.querySelector("#use-hosted-defaults"),
   connectLink: document.querySelector("#connect-link"),
   disconnectLink: document.querySelector("#disconnect-link"),
   statusPill: document.querySelector("#status-pill"),
@@ -353,12 +354,16 @@ async function loadClientConfig() {
 
   const sourceText =
     data.source === "session"
-      ? "Using credentials saved in this browser session."
-      : "Using server default credentials.";
+      ? "Using your custom app keys for this browser session."
+      : "Using hosted app credentials (no personal API key needed).";
   const warning = isPublicNonHttpsUrl(data.redirectUri)
     ? " Warning: callback is not HTTPS; Spotify auth may appear unsafe or fail."
     : "";
-  setClientConfigNote(`${sourceText} Redirect URI: ${data.redirectUri}.${warning}`);
+  const hostedHint =
+    data.source === "server"
+      ? " If Spotify blocks login, ask the app owner to add your account in Spotify Dashboard > Users and Access, or use your own keys."
+      : "";
+  setClientConfigNote(`${sourceText} Redirect URI: ${data.redirectUri}.${warning}${hostedHint}`);
   if (els.advancedCredentials) {
     els.advancedCredentials.open = data.source === "session";
   }
@@ -408,11 +413,44 @@ async function clearClientConfig() {
       throw new Error(data.error || "Failed to clear credentials.");
     }
     await loadClientConfig();
-    setStatus("neutral", "Using server defaults. Click Authorize Spotify.");
+    setStatus("neutral", "Using hosted app (no keys). Click Authorize Spotify.");
   } catch (err) {
     setClientConfigNote(`Could not clear credentials: ${err.message}`);
   } finally {
     els.clearClientConfig.disabled = false;
+  }
+}
+
+async function handleUseHostedDefaultsClick(event) {
+  event.preventDefault();
+  await clearClientConfig();
+  if (els.advancedCredentials) {
+    els.advancedCredentials.open = false;
+  }
+}
+
+function applyAuthResultFromQuery() {
+  const params = new URLSearchParams(window.location.search);
+  const connected = params.get("connected");
+  const loggedOut = params.get("logged_out");
+  const authError = params.get("auth_error");
+
+  if (authError) {
+    setStatus("error", authError);
+    els.resultSummary.textContent = `Spotify login failed: ${authError}`;
+  } else if (connected === "1") {
+    els.resultSummary.textContent = "Spotify authorized. You can now generate playlists.";
+  } else if (loggedOut === "1") {
+    els.resultSummary.textContent = "Spotify session disconnected for this browser.";
+  }
+
+  if (connected || loggedOut || authError) {
+    params.delete("connected");
+    params.delete("logged_out");
+    params.delete("auth_error");
+    const query = params.toString();
+    const next = `${window.location.pathname}${query ? `?${query}` : ""}`;
+    window.history.replaceState({}, "", next);
   }
 }
 
@@ -541,6 +579,9 @@ function init() {
   els.refreshStatus.addEventListener("click", handleRefreshStatusClick);
   els.clientConfigForm.addEventListener("submit", saveClientConfig);
   els.clearClientConfig.addEventListener("click", clearClientConfig);
+  if (els.useHostedDefaults) {
+    els.useHostedDefaults.addEventListener("click", handleUseHostedDefaultsClick);
+  }
   els.authMode.addEventListener("change", applyAuthModeUI);
   els.discoveryLevel.addEventListener("input", updateDiscoveryUI);
   els.connectLink.addEventListener("click", handleAuthorizeClick);
@@ -548,17 +589,10 @@ function init() {
 
   loadPresets()
     .then(() => loadClientConfig())
-    .then(() => {
-      const connected = new URLSearchParams(window.location.search).get("connected");
-      const loggedOut = new URLSearchParams(window.location.search).get("logged_out");
-      if (connected === "1") {
-        els.resultSummary.textContent = "Spotify authorized. You can now generate playlists.";
-      }
-      if (loggedOut === "1") {
-        els.resultSummary.textContent = "Spotify session disconnected for this browser.";
-      }
+    .then(async () => {
       updateDiscoveryUI();
-      return loadStatus();
+      await loadStatus();
+      applyAuthResultFromQuery();
     })
     .catch((err) => {
       setStatus("error", `Initialization failed: ${err.message}`);

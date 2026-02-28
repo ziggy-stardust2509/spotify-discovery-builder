@@ -88,6 +88,13 @@ function redirect(res, location) {
   res.end();
 }
 
+function redirectToApp(res, params = {}) {
+  const search = new URLSearchParams(params);
+  const suffix = search.toString();
+  const target = suffix ? `/?${suffix}` : "/";
+  redirect(res, target);
+}
+
 function parseCookies(cookieHeader) {
   if (!cookieHeader) return {};
   return cookieHeader.split(";").reduce((acc, part) => {
@@ -513,6 +520,43 @@ function mergeUnique(items = []) {
   return result;
 }
 
+function explainSpotifyIntegrationError(errorMessage) {
+  const text = String(errorMessage || "");
+  const lower = text.toLowerCase();
+
+  if (
+    lower.includes("access_denied") &&
+    (lower.includes("developer dashboard") ||
+      lower.includes("user not registered") ||
+      lower.includes("user not approved") ||
+      lower.includes("not allowed"))
+  ) {
+    return "This Spotify account is not enabled for this app yet. In Development Mode, the app owner must add users in Spotify Dashboard > Users and Access.";
+  }
+
+  if (lower.includes("invalid redirect uri") || lower.includes("redirect uri")) {
+    return "Spotify redirect URI mismatch. Use the exact same HTTPS callback URL in app settings and this server config.";
+  }
+
+  if (lower.includes("insufficient client scope") || lower.includes("insufficient scope")) {
+    return "Spotify permission scope is missing. Re-authorize and approve all requested permissions.";
+  }
+
+  if (lower.includes("spotify api") && lower.includes("failed (403)")) {
+    const hint =
+      "This Spotify account is not enabled for this app in Spotify Developer Dashboard (Users and Access), or this endpoint is restricted in Development Mode.";
+    const next =
+      "Use hosted default app access by adding the user to allowlist, or let the user save their own app keys.";
+    return `${hint} ${next}`;
+  }
+
+  if (lower.includes("token exchange failed") || lower.includes("token refresh failed")) {
+    return "Spotify authorization failed. Reconnect Spotify and confirm redirect URI/scopes are correct.";
+  }
+
+  return text || "Spotify request failed.";
+}
+
 function buildSyncOptions(body) {
   const preset = pickPreset(body.preset);
   const { artistList, genreList } = parseArtistsAndGenres({
@@ -592,7 +636,7 @@ async function handleStatus(req, res) {
   } catch (err) {
     sendJson(res, 200, {
       authenticated: false,
-      error: `Auth invalid: ${err.message}`
+      error: `Auth invalid: ${explainSpotifyIntegrationError(err.message)}`
     });
   }
 }
@@ -647,7 +691,7 @@ async function handleClientConfigSave(req, res) {
     removeFileIfExists(sessionAuthFile(sessionId));
     sendJson(res, 200, getClientConfigSummary(sessionId, req));
   } catch (err) {
-    sendJson(res, 400, { error: err.message });
+    sendJson(res, 400, { error: explainSpotifyIntegrationError(err.message) });
   }
 }
 
@@ -692,7 +736,7 @@ async function handleSync(req, res) {
       }))
     });
   } catch (err) {
-    sendJson(res, 400, { error: err.message });
+    sendJson(res, 400, { error: explainSpotifyIntegrationError(err.message) });
   }
 }
 
@@ -735,9 +779,14 @@ async function handleAuthCallback(req, reqUrl, res) {
   const code = reqUrl.searchParams.get("code");
   const state = reqUrl.searchParams.get("state");
   const error = reqUrl.searchParams.get("error");
+  const errorDescription = reqUrl.searchParams.get("error_description");
 
   if (error) {
-    sendText(res, 400, `Spotify authorization failed: ${error}`);
+    const description = String(errorDescription || "").replace(/\+/g, " ").trim();
+    const combined = description ? `${error}: ${description}` : error;
+    redirectToApp(res, {
+      auth_error: explainSpotifyIntegrationError(combined)
+    });
     return;
   }
 
@@ -749,7 +798,9 @@ async function handleAuthCallback(req, reqUrl, res) {
     if (state) {
       stateStore.delete(state);
     }
-    sendText(res, 400, "Invalid OAuth callback state.");
+    redirectToApp(res, {
+      auth_error: "Spotify login expired or is invalid. Click Authorize Spotify and try again."
+    });
     return;
   }
 
@@ -764,9 +815,11 @@ async function handleAuthCallback(req, reqUrl, res) {
       codeVerifier: stateValue.codeVerifier || undefined
     });
     setSessionCookie(req, res, sessionId);
-    redirect(res, "/?connected=1");
+    redirectToApp(res, { connected: "1" });
   } catch (err) {
-    sendText(res, 400, `Authorization exchange failed: ${err.message}`);
+    redirectToApp(res, {
+      auth_error: explainSpotifyIntegrationError(err.message)
+    });
   }
 }
 

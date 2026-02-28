@@ -30,6 +30,15 @@ Web app to create and update Spotify playlists from prompts, artists, genres, an
   - hosted example: `https://YOUR_PUBLIC_HOST/callback`
   - for public hosting, use HTTPS redirect URI only
 
+## Do users need their own API keys?
+
+- No, not by default.
+- If your server has `SPOTIFY_CLIENT_ID` configured, users can click **Authorize Spotify** without entering keys.
+- If your Spotify app is still in **Development Mode**, Spotify only allows explicitly approved users in Dashboard **Users and Access**.
+- Users blocked by Development Mode can either:
+  - be added to your allowlist, or
+  - use the app's optional **Use your own Spotify app keys** fallback.
+
 ## Environment
 
 `.env` in project root:
@@ -74,13 +83,12 @@ Open:
 
 ## Web flow
 
-1. Enter your Spotify app `Client ID` and optional `Client Secret` in **Connection** (or keep server defaults).
-2. Click **Save Credentials**.
-3. Click **Connect Spotify**.
-4. Approve OAuth.
-5. Pick a preset or enter your own prompt/artists/genres.
-6. Set discovery controls (how far outside your bubble to search).
-7. Click **Build Playlist**.
+1. Click **Authorize Spotify** (hosted app mode, no key needed).
+2. Approve OAuth.
+3. If Spotify blocks access, either get allowlisted in Dashboard **Users and Access** or open **Optional fallback** and save your own app keys.
+4. Pick a preset or enter your own prompt/artists/genres.
+5. Set discovery controls (how far outside your bubble to search).
+6. Click **Build Playlist**.
 
 ## Per-user credentials
 

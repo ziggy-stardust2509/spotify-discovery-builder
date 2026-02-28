@@ -3,10 +3,25 @@ import http from "node:http";
 import { URL } from "node:url";
 import { exec } from "node:child_process";
 import crypto from "node:crypto";
-import fetch from "node-fetch";
 
 const SPOTIFY_AUTH_BASE = "https://accounts.spotify.com";
 const SPOTIFY_API_BASE = "https://api.spotify.com/v1";
+let fetchImpl = globalThis.fetch ? globalThis.fetch.bind(globalThis) : null;
+
+async function httpFetch(url, options) {
+  if (fetchImpl) {
+    return fetchImpl(url, options);
+  }
+  try {
+    const mod = await import("node-fetch");
+    fetchImpl = mod.default;
+    return fetchImpl(url, options);
+  } catch (err) {
+    throw new Error(
+      `No fetch implementation available. Use Node 18+ or install node-fetch. (${err.message})`
+    );
+  }
+}
 
 function clampInt(value, { min, max, fallback }) {
   const parsed = Number(value);
@@ -229,7 +244,7 @@ export class SpotifyClient {
     if (codeVerifier) {
       body.code_verifier = codeVerifier;
     }
-    const response = await fetch(`${SPOTIFY_AUTH_BASE}/api/token`, {
+    const response = await httpFetch(`${SPOTIFY_AUTH_BASE}/api/token`, {
       method: "POST",
       headers: this.buildTokenRequestHeaders(),
       body: encodeForm(body)
@@ -271,7 +286,7 @@ export class SpotifyClient {
     if (!this.clientSecret) {
       body.client_id = this.clientId;
     }
-    const response = await fetch(`${SPOTIFY_AUTH_BASE}/api/token`, {
+    const response = await httpFetch(`${SPOTIFY_AUTH_BASE}/api/token`, {
       method: "POST",
       headers: this.buildTokenRequestHeaders(),
       body: encodeForm(body)
@@ -313,7 +328,7 @@ export class SpotifyClient {
       }
     }
 
-    const response = await fetch(url, {
+    const response = await httpFetch(url, {
       method,
       headers: {
         Authorization: `Bearer ${accessToken}`,
