@@ -43,6 +43,7 @@ const els = {
   importKeyFile: document.querySelector("#import-key-file"),
   importKeyPaste: document.querySelector("#import-key-paste"),
   copyCallback: document.querySelector("#copy-callback"),
+  callbackCopyStatus: document.querySelector("#callback-copy-status"),
   saveClientConfig: document.querySelector("#save-client-config"),
   saveAndConnect: document.querySelector("#save-and-connect"),
   clearClientConfig: document.querySelector("#clear-client-config"),
@@ -213,6 +214,17 @@ function setStatus(kind, text) {
 
 function setClientConfigNote(text) {
   els.clientConfigNote.textContent = text;
+}
+
+function setCallbackCopyStatus(text, kind = "neutral") {
+  if (!els.callbackCopyStatus) return;
+  els.callbackCopyStatus.textContent = text;
+  els.callbackCopyStatus.classList.remove("state-error", "state-ok");
+  if (kind === "error") {
+    els.callbackCopyStatus.classList.add("state-error");
+  } else if (kind === "ok") {
+    els.callbackCopyStatus.classList.add("state-ok");
+  }
 }
 
 function setYouTubeStatus(text, kind = "neutral", linkUrl = null, linkLabel = "Open YouTube playlist") {
@@ -415,22 +427,44 @@ async function copyTextToClipboard(text) {
   area.style.left = "-9999px";
   document.body.appendChild(area);
   area.select();
-  document.execCommand("copy");
+  const copied = document.execCommand("copy");
   document.body.removeChild(area);
+  if (!copied) {
+    throw new Error("Clipboard write was blocked by browser permissions.");
+  }
 }
 
 async function handleCopyCallbackClick(event) {
   event.preventDefault();
   const callback = String(els.callbackUri?.textContent || "").trim();
+  const originalText = els.copyCallback?.textContent || "Copy Callback URL";
+  if (els.copyCallback) {
+    els.copyCallback.disabled = true;
+    els.copyCallback.textContent = "Copying...";
+  }
   if (!callback) {
-    setKeyImportNote("Callback URL unavailable on this page.", "error");
+    setCallbackCopyStatus("Callback URL unavailable on this page.", "error");
+    if (els.copyCallback) {
+      els.copyCallback.disabled = false;
+      els.copyCallback.textContent = originalText;
+    }
     return;
   }
   try {
     await copyTextToClipboard(callback);
-    setKeyImportNote("Callback URL copied.", "ok");
+    setCallbackCopyStatus("Callback URL copied.", "ok");
   } catch (err) {
-    setKeyImportNote(`Could not copy callback URL: ${err.message}`, "error");
+    try {
+      window.prompt("Copy this callback URL:", callback);
+      setCallbackCopyStatus("Clipboard blocked. Callback URL opened in prompt for manual copy.", "ok");
+    } catch {
+      setCallbackCopyStatus(`Could not copy callback URL: ${err.message}`, "error");
+    }
+  } finally {
+    if (els.copyCallback) {
+      els.copyCallback.disabled = false;
+      els.copyCallback.textContent = originalText;
+    }
   }
 }
 
