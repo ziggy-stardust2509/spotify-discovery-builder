@@ -200,10 +200,12 @@ function isLoopbackHost(hostname) {
 
 function buildWebRedirectUri(req) {
   const forced = String(process.env.SPM_WEB_REDIRECT_URI || "").trim();
-  if (forced) return forced;
+  if (forced) return normalizeRedirectUriForBasePath(forced, CALLBACK_ROUTE_PATH);
 
   const host = requestHost(req);
-  if (!host) return config.redirectUri;
+  if (!host) {
+    return normalizeRedirectUriForBasePath(config.redirectUri, CALLBACK_ROUTE_PATH);
+  }
   const proto = requestProto(req);
   const callbackPath = withAppBasePath(CALLBACK_ROUTE_PATH);
   const candidate = `${proto}://${host}${callbackPath}`;
@@ -213,7 +215,7 @@ function buildWebRedirectUri(req) {
     try {
       const configured = new URL(config.redirectUri);
       if (configured.protocol === "https:") {
-        return config.redirectUri;
+        return normalizeRedirectUriForBasePath(config.redirectUri, CALLBACK_ROUTE_PATH);
       }
     } catch {
       // Ignore parse failure and use candidate.
@@ -494,6 +496,26 @@ function callbackRoutePath(pathname) {
 const CALLBACK_ROUTE_PATH = callbackRoutePath(CALLBACK_PATH);
 const YOUTUBE_CALLBACK_ROUTE_PATH = callbackRoutePath(YOUTUBE_CALLBACK_PATH);
 
+function normalizeRedirectUriForBasePath(value, callbackRoutePathValue = CALLBACK_ROUTE_PATH) {
+  const text = String(value || "").trim();
+  if (!text || !APP_BASE_PATH) return text;
+  let parsed;
+  try {
+    parsed = new URL(text);
+  } catch {
+    return text;
+  }
+  const currentPath = normalizePathname(parsed.pathname);
+  const baseCallbackPath = withAppBasePath(callbackRoutePathValue);
+  if (currentPath === callbackRoutePathValue && currentPath !== baseCallbackPath) {
+    parsed.pathname = baseCallbackPath;
+    parsed.search = "";
+    parsed.hash = "";
+    return parsed.toString();
+  }
+  return text;
+}
+
 function cleanupExpiredStates() {
   const now = Date.now();
   for (const [state, value] of stateStore.entries()) {
@@ -510,7 +532,9 @@ function cleanupExpiredStates() {
 
 function buildYouTubeRedirectUri(req) {
   const configured = String(config.youtubeAuthRedirectUri || "").trim();
-  if (configured) return configured;
+  if (configured) {
+    return normalizeRedirectUriForBasePath(configured, YOUTUBE_CALLBACK_ROUTE_PATH);
+  }
 
   const host = requestHost(req);
   if (!host) {
@@ -1369,6 +1393,7 @@ server.listen(PORT, HOST, () => {
     console.log(`App URL base path: ${APP_BASE_PATH}`);
   }
   console.log(`Spotify redirect URI in use: ${config.redirectUri}`);
+  console.log(`Expected Spotify callback path: ${withAppBasePath(CALLBACK_ROUTE_PATH)}`);
   console.log(`Hosted Spotify app login enabled: ${HOSTED_SPOTIFY_APP_ENABLED ? "yes" : "no"}`);
   console.log(`Session storage: ${SESSION_DIR}`);
   if (CALLBACK_PATH !== "/auth/callback") {
