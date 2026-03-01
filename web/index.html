@@ -36,28 +36,40 @@
           <h2>Step 1: Connect Spotify</h2>
           <span id="status-pill" class="pill neutral">Checking</span>
         </div>
-        <p class="section-subtitle">Most people only need one click. No personal API key required.</p>
-        <div class="auth-cta">
-          <a id="connect-link" class="btn btn-authorize" href="/auth/login">Authorize Spotify</a>
-          <p class="auth-cta-note">Secure Spotify login. You return here automatically.</p>
-        </div>
-        <p class="helper-copy">
-          If Spotify says your account is not allowed, ask the app owner to add you in Spotify Dashboard
-          <strong>Users and Access</strong>, or use your own app keys below.
+        <p class="section-subtitle">
+          Fastest setup: create a Spotify app, paste your Client ID, and connect.
         </p>
-        <div class="actions secondary-actions">
-          <button id="use-hosted-defaults" class="btn btn-ghost" type="button">Use Hosted App (No Keys)</button>
-          <button id="refresh-status" class="btn btn-ghost" type="button">Check Connection</button>
-          <a id="disconnect-link" class="btn btn-ghost" href="/auth/logout">Sign Out</a>
+        <div class="setup-guide">
+          <h3>Quick Setup</h3>
+          <ol class="help-list quick-list">
+            <li>Open Spotify Developer Dashboard and create an app.</li>
+            <li>Add this callback URL in app settings: <code id="callback-uri">https://your-host/callback</code></li>
+            <li>Copy your Client ID and save below. Client Secret is only needed for Standard mode.</li>
+          </ol>
+          <div class="actions">
+            <a
+              class="btn btn-ghost"
+              href="https://developer.spotify.com/dashboard/create"
+              target="_blank"
+              rel="noreferrer"
+            >
+              Create Spotify App
+            </a>
+            <a
+              class="btn btn-ghost"
+              href="https://developer.spotify.com/dashboard"
+              target="_blank"
+              rel="noreferrer"
+            >
+              Open Dashboard
+            </a>
+            <button id="copy-callback" class="btn btn-ghost" type="button">Copy Callback URL</button>
+          </div>
         </div>
-        <p id="status-text">Loading Spotify status...</p>
 
-        <details id="advanced-credentials" class="help-box optional-box">
-          <summary>Optional fallback: Use your own Spotify Developer app</summary>
+        <details id="advanced-credentials" class="help-box optional-box" open>
+          <summary>Connection settings (your keys first, hosted app optional)</summary>
           <form id="client-config-form">
-            <p class="helper-copy">
-              Only use this if hosted app auth is blocked for your account, or you prefer your own Spotify app.
-            </p>
             <div class="grid two">
               <label>
                 Spotify Client ID
@@ -72,34 +84,53 @@
               </label>
             </div>
             <label>
-              Spotify Client Secret
+              Spotify Client Secret (only for Standard mode)
               <input id="clientSecret" name="clientSecret" type="password" autocomplete="off" />
             </label>
-            <p id="client-config-note">Using server defaults unless you save overrides.</p>
-            <details class="help-box">
-              <summary>How to create a Spotify Developer app</summary>
-              <ol class="help-list">
-                <li>
-                  Open
-                  <a href="https://developer.spotify.com/dashboard" target="_blank" rel="noreferrer">
-                    developer.spotify.com/dashboard
-                  </a>
-                  and sign in.
-                </li>
-                <li>Create app and give it any name/description.</li>
-                <li>
-                  Add this Redirect URI in app settings:
-                  <code id="callback-uri">https://your-host/callback</code>
-                </li>
-                <li>For public hosting, redirect URI must use HTTPS (not HTTP).</li>
-              </ol>
+            <p class="helper-copy">PKCE users can leave Client Secret blank.</p>
+
+            <details class="help-box import-box">
+              <summary>Import keys from file or pasted text</summary>
+              <div class="grid two">
+                <label>
+                  Upload `.env` / JSON
+                  <input id="key-file" type="file" accept=".env,.txt,.json,application/json,text/plain" />
+                </label>
+                <label>
+                  Paste credentials
+                  <textarea
+                    id="key-paste"
+                    rows="4"
+                    placeholder="SPOTIFY_CLIENT_ID=...&#10;SPOTIFY_CLIENT_SECRET=..."
+                  ></textarea>
+                </label>
+              </div>
+              <div class="actions credential-actions">
+                <button id="import-key-file" class="btn btn-ghost" type="button">Use Uploaded File</button>
+                <button id="import-key-paste" class="btn btn-ghost" type="button">Use Pasted Text</button>
+              </div>
+              <p id="key-import-note" class="helper-copy">No key data imported yet.</p>
             </details>
+
+            <p id="client-config-note">Using server defaults unless you save overrides.</p>
             <div class="actions credential-actions">
-              <button id="save-client-config" class="btn btn-ghost" type="submit">Save My App Keys</button>
-              <button id="clear-client-config" class="btn btn-ghost" type="button">Reset To Defaults</button>
+              <button id="save-client-config" class="btn btn-ghost" type="submit">Save Keys</button>
+              <button id="save-and-connect" class="btn btn-authorize" type="submit">Save + Connect Spotify</button>
+              <button id="use-hosted-defaults" class="btn btn-ghost" type="button">Use Hosted App (No Keys)</button>
+              <button id="clear-client-config" class="btn btn-ghost" type="button">Clear Saved Keys</button>
             </div>
           </form>
         </details>
+
+        <div class="auth-cta">
+          <a id="connect-link" class="btn btn-authorize" href="/auth/login">Authorize Spotify</a>
+          <p class="auth-cta-note">Use this if keys are already saved for this browser.</p>
+        </div>
+        <div class="actions secondary-actions">
+          <button id="refresh-status" class="btn btn-ghost" type="button">Check Connection</button>
+          <a id="disconnect-link" class="btn btn-ghost" href="/auth/logout">Sign Out</a>
+        </div>
+        <p id="status-text">Loading Spotify status...</p>
       </section>
 
       <section class="panel reveal delay-2">
