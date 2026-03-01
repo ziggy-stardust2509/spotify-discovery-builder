@@ -6,11 +6,11 @@ This app can be hosted on Feral so multiple users can sign in with their own Spo
 
 In Spotify Developer Dashboard, add an exact redirect URI for your hosted app:
 
-- `https://YOUR_PUBLIC_HOST/callback`
+- `https://YOUR_PUBLIC_HOST/spotifried/callback`
 
 Example if your app is exposed on `oceanus.feralhosting.com`:
 
-- `https://oceanus.feralhosting.com/callback`
+- `https://oceanus.feralhosting.com/spotifried/callback`
 
 ## 2. Upload project to Feral
 
@@ -48,8 +48,10 @@ Create `/media/sdq1/daffadillion/apps/spotify-playlist-manager/.env`:
 ```env
 SPOTIFY_CLIENT_ID=YOUR_SPOTIFY_CLIENT_ID
 SPOTIFY_AUTH_MODE=pkce
-SPOTIFY_REDIRECT_URI=https://YOUR_PUBLIC_HOST/callback
-SPM_WEB_REDIRECT_URI=https://YOUR_PUBLIC_HOST/callback
+SPOTIFY_REDIRECT_URI=https://YOUR_PUBLIC_HOST/spotifried/callback
+SPM_WEB_REDIRECT_URI=https://YOUR_PUBLIC_HOST/spotifried/callback
+SPM_BASE_PATH=/spotifried
+SPM_REDIRECT_ROOT_TO_BASE=false
 HOST=0.0.0.0
 PORT=3000
 SPM_SESSION_DIR=.sessions
@@ -80,7 +82,10 @@ tmux ls
 
 Set up your existing web server / reverse proxy to forward:
 
-- `https://YOUR_PUBLIC_HOST/*` -> `http://APP_SERVER_IP:3000/*`
+- `https://YOUR_PUBLIC_HOST/spotifried/*` -> `http://APP_SERVER_IP:3000/spotifried/*`
+
+Optional:
+- block `https://YOUR_PUBLIC_HOST/` or redirect it somewhere else (but not to this app)
 
 On your Feral box, find `APP_SERVER_IP` with:
 
@@ -90,15 +95,15 @@ hostname -I
 
 Your proxy must preserve:
 
-- path `/callback`
+- path `/spotifried/callback`
 - `X-Forwarded-Proto: https` (recommended for secure cookies)
 - `X-Forwarded-Host` (recommended so callback origin stays correct)
 
 ## 7. Validate
 
-1. Open `https://YOUR_PUBLIC_HOST`
+1. Open `https://YOUR_PUBLIC_HOST/spotifried`
 2. Click **Connect Spotify**
-3. Complete consent and return to `/callback`
+3. Complete consent and return to `/spotifried/callback`
 4. Confirm status says connected
 5. Run a playlist sync
 
