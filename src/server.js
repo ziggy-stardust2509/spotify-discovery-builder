@@ -7,6 +7,7 @@ import { URL } from "node:url";
 import { getConfig } from "./config.js";
 import { PRESETS, parseArtistsAndGenres, syncPlaylist } from "./playlistManager.js";
 import { SpotifyClient } from "./spotify.js";
+import { YouTubeClient } from "./youtube.js";
 
 const config = getConfig();
 const redirectTarget = new URL(config.redirectUri);
@@ -520,6 +521,28 @@ function mergeUnique(items = []) {
   return result;
 }
 
+function sanitizeYouTubeTracks(value) {
+  if (!Array.isArray(value)) return [];
+  const tracks = [];
+  for (const item of value) {
+    const name = String(item?.name || "").trim();
+    if (!name) continue;
+    const artists = Array.isArray(item?.artists)
+      ? item.artists
+          .map((artist) => String(artist || "").trim())
+          .filter(Boolean)
+          .slice(0, 5)
+      : String(item?.artists || "")
+          .split(",")
+          .map((artist) => artist.trim())
+          .filter(Boolean)
+          .slice(0, 5);
+    tracks.push({ name, artists });
+    if (tracks.length >= 50) break;
+  }
+  return tracks;
+}
+
 function explainSpotifyIntegrationError(errorMessage) {
   const text = String(errorMessage || "");
   const lower = text.toLowerCase();
@@ -754,6 +777,36 @@ async function handleSync(req, res) {
   }
 }
 
+async function handleYouTubePlaylist(req, res) {
+  if (!enforceRateLimit(req, res, { bucket: "youtube-playlist", max: 12 })) {
+    return;
+  }
+  try {
+    const body = await readJsonBody(req);
+    const tracks = sanitizeYouTubeTracks(body?.tracks);
+    if (!tracks.length) {
+      sendJson(res, 400, { error: "No tracks available. Build a playlist first." });
+      return;
+    }
+
+    const youtube = new YouTubeClient(config);
+    if (!youtube.isConfigured()) {
+      sendJson(res, 400, {
+        error:
+          "YouTube export is not configured on this server. Set YOUTUBE_API_KEY in .env and restart."
+      });
+      return;
+    }
+
+    const result = await youtube.createInstantPlaylist(tracks, {
+      name: body?.name
+    });
+    sendJson(res, 200, result);
+  } catch (err) {
+    sendJson(res, 400, { error: explainSpotifyIntegrationError(err.message) });
+  }
+}
+
 async function handleAuthLogin(_req, res) {
   cleanupExpiredStates();
   const req = _req;
@@ -947,6 +1000,11 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === "POST" && normalizedPath === "/api/sync") {
     await handleSync(req, res);
+    return;
+  }
+
+  if (req.method === "POST" && normalizedPath === "/api/youtube/playlist") {
+    await handleYouTubePlaylist(req, res);
     return;
   }
 

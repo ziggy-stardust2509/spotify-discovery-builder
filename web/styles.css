@@ -261,9 +261,73 @@ input[type="range"] {
   margin-bottom: 0.35rem;
 }
 
+.setup-guide {
+  margin: 0.25rem 0 0.8rem;
+  border: 1px solid rgba(157, 181, 171, 0.28);
+  border-radius: 14px;
+  padding: 0.7rem 0.8rem;
+  background: linear-gradient(150deg, rgba(10, 19, 17, 0.78), rgba(12, 25, 22, 0.6));
+}
+
+.setup-guide h3 {
+  margin-bottom: 0.25rem;
+}
+
+.quick-list {
+  margin-top: 0.35rem;
+}
+
+.quick-list li {
+  line-height: 1.35;
+}
+
+.import-box {
+  margin-top: 0.45rem;
+}
+
+#callback-uri {
+  display: inline-block;
+  margin-top: 0.15rem;
+  padding: 0.16rem 0.4rem;
+  border-radius: 7px;
+  background: rgba(22, 38, 34, 0.8);
+  border: 1px solid rgba(157, 181, 171, 0.26);
+  color: #c7fbe8;
+}
+
+#key-paste {
+  font-family: "IBM Plex Sans", "Avenir Next", sans-serif;
+  font-size: 0.86rem;
+}
+
+.helper-copy.state-error {
+  color: #ffb8b8;
+}
+
+.helper-copy.state-ok {
+  color: #9af2d4;
+}
+
+#youtube-status a {
+  color: #91f2d4;
+}
+
+.credential-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem;
+}
+
 .credential-actions .btn {
   min-height: 40px;
   font-size: 0.85rem;
+  width: 100%;
+}
+
+.credential-actions #save-and-connect {
+  min-height: 42px;
+  font-size: 0.9rem;
+  width: 100%;
 }
 
 .optional-box {
@@ -555,6 +619,10 @@ input[type="range"] {
     display: grid;
     grid-template-columns: 1fr;
     gap: 0.5rem;
+  }
+
+  .credential-actions {
+    grid-template-columns: 1fr;
   }
 
   .actions .btn {

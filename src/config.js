@@ -70,6 +70,12 @@ export function getConfig() {
       ].join(" "),
     searchMarket: process.env.SPOTIFY_SEARCH_MARKET || "US",
     searchLimitMax: Math.max(1, Math.min(50, parseIntOr(process.env.SPOTIFY_SEARCH_LIMIT_MAX, 10))),
+    youtubeApiKey: String(process.env.YOUTUBE_API_KEY || "").trim(),
+    youtubeRegion: String(process.env.YOUTUBE_REGION || "US").trim().toUpperCase(),
+    youtubeMaxSearchResults: Math.max(
+      1,
+      Math.min(10, parseIntOr(process.env.YOUTUBE_MAX_SEARCH_RESULTS, 5))
+    ),
     authFile: path.resolve(
       process.cwd(),
       process.env.SPOTIFY_AUTH_FILE || ".spotify-auth.json"

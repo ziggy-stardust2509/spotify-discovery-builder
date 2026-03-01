@@ -2,7 +2,9 @@ const state = {
   presets: {},
   sessionId: null,
   sessionStorageReady: true,
-  loadedClientConfig: null
+  loadedClientConfig: null,
+  lastSelectedTracks: [],
+  lastPlaylistName: ""
 };
 
 const PREFILL_CLEAR_IDS = ["name", "seedSong", "prompt", "artists", "genres"];
@@ -50,6 +52,8 @@ const els = {
   statusPill: document.querySelector("#status-pill"),
   statusText: document.querySelector("#status-text"),
   resultSummary: document.querySelector("#result-summary"),
+  makeYouTubePlaylist: document.querySelector("#make-youtube-playlist"),
+  youtubeStatus: document.querySelector("#youtube-status"),
   trackList: document.querySelector("#track-list"),
   refreshStatus: document.querySelector("#refresh-status")
 };
@@ -209,6 +213,26 @@ function setStatus(kind, text) {
 
 function setClientConfigNote(text) {
   els.clientConfigNote.textContent = text;
+}
+
+function setYouTubeStatus(text, kind = "neutral", linkUrl = null, linkLabel = "Open YouTube playlist") {
+  if (!els.youtubeStatus) return;
+  els.youtubeStatus.textContent = text;
+  els.youtubeStatus.classList.remove("state-error", "state-ok");
+  if (kind === "error") {
+    els.youtubeStatus.classList.add("state-error");
+  } else if (kind === "ok") {
+    els.youtubeStatus.classList.add("state-ok");
+  }
+  if (linkUrl) {
+    els.youtubeStatus.append(document.createTextNode(" "));
+    const link = document.createElement("a");
+    link.href = linkUrl;
+    link.target = "_blank";
+    link.rel = "noreferrer";
+    link.textContent = linkLabel;
+    els.youtubeStatus.append(link);
+  }
 }
 
 function buildClientConfigPayload() {
@@ -752,6 +776,12 @@ function applyAuthResultFromQuery() {
 
 function renderResult(result) {
   if (result.error) {
+    state.lastSelectedTracks = [];
+    state.lastPlaylistName = "";
+    if (els.makeYouTubePlaylist) {
+      els.makeYouTubePlaylist.disabled = true;
+    }
+    setYouTubeStatus("Generate a Spotify playlist first, then export this selection to YouTube.");
     els.resultSummary.textContent = `Error: ${result.error}`;
     els.trackList.innerHTML = "";
     return;
@@ -780,6 +810,25 @@ function renderResult(result) {
     summaryBits.push(`Seed: ${result.seedTrack.name}${seedArtists ? ` (${seedArtists})` : ""}`);
   }
   els.resultSummary.textContent = summaryBits.join(" | ");
+  state.lastSelectedTracks = Array.isArray(result.selected)
+    ? result.selected
+        .map((track) => ({
+          name: String(track?.name || "").trim(),
+          artists: Array.isArray(track?.artists) ? track.artists : []
+        }))
+        .filter((track) => Boolean(track.name))
+    : [];
+  state.lastPlaylistName = String(result?.name || "").trim();
+  if (els.makeYouTubePlaylist) {
+    els.makeYouTubePlaylist.disabled = state.lastSelectedTracks.length === 0;
+  }
+  if (state.lastSelectedTracks.length > 0) {
+    setYouTubeStatus(
+      `Ready to export ${state.lastSelectedTracks.length} tracks to YouTube.`
+    );
+  } else {
+    setYouTubeStatus("No tracks were selected for YouTube export.");
+  }
   if (result.playlistUrl) {
     els.resultSummary.append(document.createTextNode(" | Spotify: "));
     const link = document.createElement("a");
@@ -806,6 +855,53 @@ function renderResult(result) {
       li.textContent = `${track.name} — ${artistText}`;
     }
     els.trackList.appendChild(li);
+  }
+}
+
+async function handleMakeYouTubePlaylistClick(event) {
+  event.preventDefault();
+  if (!state.lastSelectedTracks.length) {
+    setYouTubeStatus("Generate a Spotify playlist first.", "error");
+    return;
+  }
+  const originalText = els.makeYouTubePlaylist?.textContent || "Make YouTube Playlist";
+  if (els.makeYouTubePlaylist) {
+    els.makeYouTubePlaylist.disabled = true;
+    els.makeYouTubePlaylist.textContent = "Building YouTube playlist...";
+  }
+  setYouTubeStatus("Matching tracks on YouTube...");
+  try {
+    const response = await apiFetch("/api/youtube/playlist", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: state.lastPlaylistName || "Discovery Mix",
+        tracks: state.lastSelectedTracks
+      })
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || "Could not build YouTube playlist.");
+    }
+    if (!data.youtubeUrl) {
+      setYouTubeStatus("No high-confidence YouTube matches found.", "error");
+      return;
+    }
+    const unmatched = Array.isArray(data.unmatched) ? data.unmatched.length : 0;
+    const suffix = unmatched > 0 ? ` (${unmatched} tracks skipped)` : "";
+    setYouTubeStatus(
+      `YouTube playlist ready with ${Number(data.videoCount || 0)} videos${suffix}.`,
+      "ok",
+      data.youtubeUrl
+    );
+    window.open(data.youtubeUrl, "_blank", "noopener,noreferrer");
+  } catch (err) {
+    setYouTubeStatus(`YouTube export failed: ${err.message}`, "error");
+  } finally {
+    if (els.makeYouTubePlaylist) {
+      els.makeYouTubePlaylist.textContent = originalText;
+      els.makeYouTubePlaylist.disabled = state.lastSelectedTracks.length === 0;
+    }
   }
 }
 
@@ -896,6 +992,9 @@ function init() {
   els.discoveryLevel.addEventListener("input", updateDiscoveryUI);
   els.connectLink.addEventListener("click", handleAuthorizeClick);
   els.disconnectLink.addEventListener("click", handleLogoutClick);
+  if (els.makeYouTubePlaylist) {
+    els.makeYouTubePlaylist.addEventListener("click", handleMakeYouTubePlaylistClick);
+  }
 
   loadPresets()
     .then(() => loadClientConfig())

@@ -17,6 +17,10 @@ Web app to create and update Spotify playlists from prompts, artists, genres, an
 - Seed-song mode:
   - start from one song (name, URL, or URI)
   - expands with diversified recommendations instead of repeating the same obvious tracks
+- Optional YouTube export:
+  - takes selected Spotify tracks
+  - finds YouTube matches
+  - builds a YouTube watch playlist link
 - Supports presets:
   - `drumming`
   - `discovery`
@@ -66,6 +70,9 @@ SPOTIFY_SEARCH_LIMIT_MAX=10
 SPM_SESSION_DIR=.sessions
 SPM_COOKIE_SECURE=true
 SPM_WEB_REDIRECT_URI=https://YOUR_PUBLIC_HOST/callback
+YOUTUBE_API_KEY=...
+YOUTUBE_REGION=US
+YOUTUBE_MAX_SEARCH_RESULTS=5
 ```
 
 `SPM_WEB_REDIRECT_URI` is recommended in hosted deployments so OAuth always uses your trusted HTTPS callback.
