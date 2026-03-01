@@ -205,7 +205,8 @@ function buildWebRedirectUri(req) {
   const host = requestHost(req);
   if (!host) return config.redirectUri;
   const proto = requestProto(req);
-  const candidate = `${proto}://${host}${CALLBACK_PATH}`;
+  const callbackPath = withAppBasePath(CALLBACK_ROUTE_PATH);
+  const candidate = `${proto}://${host}${callbackPath}`;
   const isPublicHttp = proto !== "https" && !isLoopbackHost(hostToHostname(host));
   if (isPublicHttp) {
     // If proxy headers are missing, prefer configured secure callback over rejecting auth.
@@ -1089,7 +1090,11 @@ async function handleAuthLogin(_req, res) {
     const authorizationUrl = createAuthorizationUrlForSession(req, sessionId);
     redirect(res, authorizationUrl);
   } catch (err) {
-    sendText(res, 400, `${err.message}. Use https://YOUR_HOST/callback in Spotify app settings.`);
+    sendText(
+      res,
+      400,
+      `${err.message}. Use https://YOUR_HOST${withAppBasePath("/callback")} in Spotify app settings.`
+    );
   }
 }
 
@@ -1107,7 +1112,7 @@ async function handleAuthLoginUrl(req, res) {
     sendJson(res, 200, { authorizationUrl });
   } catch (err) {
     sendJson(res, 400, {
-      error: `${err.message}. Use https://YOUR_HOST/callback in Spotify app settings.`
+      error: `${err.message}. Use https://YOUR_HOST${withAppBasePath("/callback")} in Spotify app settings.`
     });
   }
 }
