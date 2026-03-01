@@ -19,8 +19,8 @@ Web app to create and update Spotify playlists from prompts, artists, genres, an
   - expands with diversified recommendations instead of repeating the same obvious tracks
 - Optional YouTube export:
   - takes selected Spotify tracks
-  - finds YouTube matches
-  - builds a YouTube watch playlist link
+  - with `YOUTUBE_API_KEY`: finds matches and builds a YouTube watch playlist link
+  - without `YOUTUBE_API_KEY`: still works by generating per-track YouTube search links
 - Supports presets:
   - `drumming`
   - `discovery`

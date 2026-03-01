@@ -74,6 +74,11 @@ function buildSearchQuery(track) {
   return `${track.name || ""} ${artists} official audio`.trim();
 }
 
+function buildSearchUrl(track) {
+  const query = buildSearchQuery(track);
+  return `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`;
+}
+
 function buildYouTubeTrackInput(input) {
   const name = String(input?.name || "").trim();
   const artists = Array.isArray(input?.artists)
@@ -195,4 +200,25 @@ export class YouTubeClient {
       unmatched
     };
   }
+}
+
+export function buildSearchLinkFallback(rawTracks, { name } = {}) {
+  const tracks = Array.isArray(rawTracks)
+    ? rawTracks.map(buildYouTubeTrackInput).filter((track) => Boolean(track.name))
+    : [];
+  const searchLinks = tracks.slice(0, 50).map((track) => ({
+    name: track.name,
+    artists: track.artists,
+    youtubeUrl: buildSearchUrl(track)
+  }));
+  const firstUrl = searchLinks[0]?.youtubeUrl || null;
+  return {
+    mode: "search_links",
+    name: String(name || "YouTube Discovery Mix").trim(),
+    videoCount: 0,
+    youtubeUrl: firstUrl,
+    searchLinks,
+    matches: [],
+    unmatched: []
+  };
 }

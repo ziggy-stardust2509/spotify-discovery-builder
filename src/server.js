@@ -7,7 +7,7 @@ import { URL } from "node:url";
 import { getConfig } from "./config.js";
 import { PRESETS, parseArtistsAndGenres, syncPlaylist } from "./playlistManager.js";
 import { SpotifyClient } from "./spotify.js";
-import { YouTubeClient } from "./youtube.js";
+import { YouTubeClient, buildSearchLinkFallback } from "./youtube.js";
 
 const config = getConfig();
 const redirectTarget = new URL(config.redirectUri);
@@ -790,17 +790,13 @@ async function handleYouTubePlaylist(req, res) {
     }
 
     const youtube = new YouTubeClient(config);
-    if (!youtube.isConfigured()) {
-      sendJson(res, 400, {
-        error:
-          "YouTube export is not configured on this server. Set YOUTUBE_API_KEY in .env and restart."
-      });
-      return;
-    }
-
-    const result = await youtube.createInstantPlaylist(tracks, {
-      name: body?.name
-    });
+    const result = youtube.isConfigured()
+      ? await youtube.createInstantPlaylist(tracks, {
+          name: body?.name
+        })
+      : buildSearchLinkFallback(tracks, {
+          name: body?.name
+        });
     sendJson(res, 200, result);
   } catch (err) {
     sendJson(res, 400, { error: explainSpotifyIntegrationError(err.message) });

@@ -55,6 +55,7 @@ const els = {
   resultSummary: document.querySelector("#result-summary"),
   makeYouTubePlaylist: document.querySelector("#make-youtube-playlist"),
   youtubeStatus: document.querySelector("#youtube-status"),
+  youtubeLinkList: document.querySelector("#youtube-link-list"),
   trackList: document.querySelector("#track-list"),
   refreshStatus: document.querySelector("#refresh-status")
 };
@@ -244,6 +245,22 @@ function setYouTubeStatus(text, kind = "neutral", linkUrl = null, linkLabel = "O
     link.rel = "noreferrer";
     link.textContent = linkLabel;
     els.youtubeStatus.append(link);
+  }
+}
+
+function renderYouTubeLinks(links = []) {
+  if (!els.youtubeLinkList) return;
+  els.youtubeLinkList.innerHTML = "";
+  for (const item of links.slice(0, 20)) {
+    const li = document.createElement("li");
+    const artistText = Array.isArray(item?.artists) ? item.artists.join(", ") : "";
+    const link = document.createElement("a");
+    link.href = item.youtubeUrl;
+    link.target = "_blank";
+    link.rel = "noreferrer";
+    link.textContent = item.name || "Open YouTube search";
+    li.append(link, document.createTextNode(artistText ? ` — ${artistText}` : ""));
+    els.youtubeLinkList.append(li);
   }
 }
 
@@ -815,6 +832,7 @@ function renderResult(result) {
     if (els.makeYouTubePlaylist) {
       els.makeYouTubePlaylist.disabled = true;
     }
+    renderYouTubeLinks([]);
     setYouTubeStatus("Generate a Spotify playlist first, then export this selection to YouTube.");
     els.resultSummary.textContent = `Error: ${result.error}`;
     els.trackList.innerHTML = "";
@@ -863,6 +881,7 @@ function renderResult(result) {
   } else {
     setYouTubeStatus("No tracks were selected for YouTube export.");
   }
+  renderYouTubeLinks([]);
   if (result.playlistUrl) {
     els.resultSummary.append(document.createTextNode(" | Spotify: "));
     const link = document.createElement("a");
@@ -917,6 +936,19 @@ async function handleMakeYouTubePlaylistClick(event) {
     if (!response.ok) {
       throw new Error(data.error || "Could not build YouTube playlist.");
     }
+    if (data.mode === "search_links") {
+      const links = Array.isArray(data.searchLinks) ? data.searchLinks : [];
+      renderYouTubeLinks(links);
+      const count = links.length;
+      setYouTubeStatus(
+        `YouTube API key is not configured, so we generated ${count} search links you can open manually.`,
+        "ok",
+        links[0]?.youtubeUrl || data.youtubeUrl,
+        "Open first link"
+      );
+      return;
+    }
+    renderYouTubeLinks([]);
     if (!data.youtubeUrl) {
       setYouTubeStatus("No high-confidence YouTube matches found.", "error");
       return;
