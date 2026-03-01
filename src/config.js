@@ -76,6 +76,12 @@ export function getConfig() {
       1,
       Math.min(10, parseIntOr(process.env.YOUTUBE_MAX_SEARCH_RESULTS, 5))
     ),
+    youtubeClientId: String(process.env.YOUTUBE_CLIENT_ID || "").trim(),
+    youtubeClientSecret: String(process.env.YOUTUBE_CLIENT_SECRET || "").trim(),
+    youtubeAuthRedirectUri: String(process.env.YOUTUBE_OAUTH_REDIRECT_URI || "").trim(),
+    youtubeAuthScopes:
+      String(process.env.YOUTUBE_AUTH_SCOPES || "").trim() ||
+      "https://www.googleapis.com/auth/youtube",
     authFile: path.resolve(
       process.cwd(),
       process.env.SPOTIFY_AUTH_FILE || ".spotify-auth.json"

@@ -19,7 +19,8 @@ Web app to create and update Spotify playlists from prompts, artists, genres, an
   - expands with diversified recommendations instead of repeating the same obvious tracks
 - Optional YouTube export:
   - takes selected Spotify tracks
-  - with `YOUTUBE_API_KEY`: finds matches and builds a YouTube watch playlist link
+  - **Save To YouTube Account** (real playlist) using Google OAuth
+  - with `YOUTUBE_API_KEY`: quick matching mode builds a YouTube watch link
   - without `YOUTUBE_API_KEY`: still works by generating per-track YouTube search links
 - Supports presets:
   - `drumming`
@@ -73,6 +74,10 @@ SPM_WEB_REDIRECT_URI=https://YOUR_PUBLIC_HOST/callback
 YOUTUBE_API_KEY=...
 YOUTUBE_REGION=US
 YOUTUBE_MAX_SEARCH_RESULTS=5
+YOUTUBE_CLIENT_ID=...
+YOUTUBE_CLIENT_SECRET=...
+YOUTUBE_OAUTH_REDIRECT_URI=https://YOUR_PUBLIC_HOST/auth/youtube/callback
+YOUTUBE_AUTH_SCOPES=https://www.googleapis.com/auth/youtube
 ```
 
 `SPM_WEB_REDIRECT_URI` is recommended in hosted deployments so OAuth always uses your trusted HTTPS callback.
@@ -96,6 +101,9 @@ Open:
 4. Pick a preset or enter your own prompt/artists/genres.
 5. Set discovery controls (how far outside your bubble to search).
 6. Click **Build Playlist**.
+7. In Step 3, either:
+   - click **Save To YouTube Account** for a real YouTube playlist (OAuth), or
+   - click **Get YouTube Links (No Login)** for manual no-key mode.
 
 ## Per-user credentials
 
@@ -112,6 +120,13 @@ Open:
 3. Copy `Client ID` (and `Client Secret` for Standard mode).
 4. Paste those values in this app’s **Connection** section and click **Save Credentials**.
 5. Click **Connect Spotify**.
+
+## YouTube account playlist setup (server admin)
+
+1. Create a Google Cloud OAuth app for web.
+2. Add redirect URI: `https://YOUR_APP_HOST/auth/youtube/callback`.
+3. Set `YOUTUBE_CLIENT_ID`, `YOUTUBE_CLIENT_SECRET`, and `YOUTUBE_OAUTH_REDIRECT_URI` on the server.
+4. Users click **Save To YouTube Account** once, approve Google OAuth, then playlists save directly to their YouTube account.
 
 ## Previous quick flow
 

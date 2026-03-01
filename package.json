@@ -8,7 +8,7 @@
     "start": "node src/server.js",
     "auth": "node src/cli.js auth",
     "sync": "node src/cli.js sync",
-    "check": "node --check src/cli.js && node --check src/server.js && node --check src/spotify.js && node --check src/youtube.js && node --check src/playlistManager.js && node --check web/app.js"
+    "check": "node --check src/config.js && node --check src/cli.js && node --check src/server.js && node --check src/spotify.js && node --check src/youtube.js && node --check src/youtubeOAuth.js && node --check src/playlistManager.js && node --check web/app.js"
   },
   "engines": {
     "node": ">=16"

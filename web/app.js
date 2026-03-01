@@ -53,6 +53,7 @@ const els = {
   statusPill: document.querySelector("#status-pill"),
   statusText: document.querySelector("#status-text"),
   resultSummary: document.querySelector("#result-summary"),
+  saveYouTubePlaylist: document.querySelector("#save-youtube-playlist"),
   makeYouTubePlaylist: document.querySelector("#make-youtube-playlist"),
   youtubeStatus: document.querySelector("#youtube-status"),
   youtubeLinkList: document.querySelector("#youtube-link-list"),
@@ -245,6 +246,16 @@ function setYouTubeStatus(text, kind = "neutral", linkUrl = null, linkLabel = "O
     link.rel = "noreferrer";
     link.textContent = linkLabel;
     els.youtubeStatus.append(link);
+  }
+}
+
+function setYouTubeActionDisabled(disabled) {
+  const value = Boolean(disabled);
+  if (els.makeYouTubePlaylist) {
+    els.makeYouTubePlaylist.disabled = value;
+  }
+  if (els.saveYouTubePlaylist) {
+    els.saveYouTubePlaylist.disabled = value;
   }
 }
 
@@ -805,6 +816,8 @@ function applyAuthResultFromQuery() {
   const connected = params.get("connected");
   const loggedOut = params.get("logged_out");
   const authError = params.get("auth_error");
+  const youtubeConnected = params.get("youtube_connected");
+  const youtubeAuthError = params.get("youtube_auth_error");
 
   if (authError) {
     setStatus("error", authError);
@@ -815,10 +828,18 @@ function applyAuthResultFromQuery() {
     els.resultSummary.textContent = "Spotify session disconnected for this browser.";
   }
 
-  if (connected || loggedOut || authError) {
+  if (youtubeAuthError) {
+    setYouTubeStatus(`YouTube login failed: ${youtubeAuthError}`, "error");
+  } else if (youtubeConnected === "1") {
+    setYouTubeStatus("YouTube connected. Click Save To YouTube Account to create a playlist.", "ok");
+  }
+
+  if (connected || loggedOut || authError || youtubeConnected || youtubeAuthError) {
     params.delete("connected");
     params.delete("logged_out");
     params.delete("auth_error");
+    params.delete("youtube_connected");
+    params.delete("youtube_auth_error");
     const query = params.toString();
     const next = `${window.location.pathname}${query ? `?${query}` : ""}`;
     window.history.replaceState({}, "", next);
@@ -829,11 +850,9 @@ function renderResult(result) {
   if (result.error) {
     state.lastSelectedTracks = [];
     state.lastPlaylistName = "";
-    if (els.makeYouTubePlaylist) {
-      els.makeYouTubePlaylist.disabled = true;
-    }
+    setYouTubeActionDisabled(true);
     renderYouTubeLinks([]);
-    setYouTubeStatus("Generate a Spotify playlist first, then export this selection to YouTube.");
+    setYouTubeStatus("Generate a Spotify playlist first, then save to YouTube or open quick links.");
     els.resultSummary.textContent = `Error: ${result.error}`;
     els.trackList.innerHTML = "";
     return;
@@ -871,9 +890,7 @@ function renderResult(result) {
         .filter((track) => Boolean(track.name))
     : [];
   state.lastPlaylistName = String(result?.name || "").trim();
-  if (els.makeYouTubePlaylist) {
-    els.makeYouTubePlaylist.disabled = state.lastSelectedTracks.length === 0;
-  }
+  setYouTubeActionDisabled(state.lastSelectedTracks.length === 0);
   if (state.lastSelectedTracks.length > 0) {
     setYouTubeStatus(
       `Ready to export ${state.lastSelectedTracks.length} tracks to YouTube.`
@@ -917,10 +934,15 @@ async function handleMakeYouTubePlaylistClick(event) {
     setYouTubeStatus("Generate a Spotify playlist first.", "error");
     return;
   }
-  const originalText = els.makeYouTubePlaylist?.textContent || "Make YouTube Playlist";
+  const originalText = els.makeYouTubePlaylist?.textContent || "Get YouTube Links (No Login)";
+  if (els.makeYouTubePlaylist) {
+    els.makeYouTubePlaylist.textContent = "Building quick links...";
+  }
+  if (els.saveYouTubePlaylist) {
+    els.saveYouTubePlaylist.disabled = true;
+  }
   if (els.makeYouTubePlaylist) {
     els.makeYouTubePlaylist.disabled = true;
-    els.makeYouTubePlaylist.textContent = "Building YouTube playlist...";
   }
   setYouTubeStatus("Matching tracks on YouTube...");
   try {
@@ -966,8 +988,64 @@ async function handleMakeYouTubePlaylistClick(event) {
   } finally {
     if (els.makeYouTubePlaylist) {
       els.makeYouTubePlaylist.textContent = originalText;
-      els.makeYouTubePlaylist.disabled = state.lastSelectedTracks.length === 0;
     }
+    setYouTubeActionDisabled(state.lastSelectedTracks.length === 0);
+  }
+}
+
+async function handleSaveYouTubePlaylistClick(event) {
+  event.preventDefault();
+  if (!state.lastSelectedTracks.length) {
+    setYouTubeStatus("Generate a Spotify playlist first.", "error");
+    return;
+  }
+  const originalText = els.saveYouTubePlaylist?.textContent || "Save To YouTube Account";
+  if (els.saveYouTubePlaylist) {
+    els.saveYouTubePlaylist.textContent = "Saving...";
+  }
+  if (els.makeYouTubePlaylist) {
+    els.makeYouTubePlaylist.disabled = true;
+  }
+  if (els.saveYouTubePlaylist) {
+    els.saveYouTubePlaylist.disabled = true;
+  }
+  setYouTubeStatus("Saving playlist to your YouTube account...");
+  try {
+    const response = await apiFetch("/api/youtube/create-playlist", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: state.lastPlaylistName || "Discovery Mix",
+        tracks: state.lastSelectedTracks
+      })
+    });
+    const data = await response.json();
+    if (response.status === 401 && data?.authUrl) {
+      window.location.assign(data.authUrl);
+      return;
+    }
+    if (!response.ok) {
+      throw new Error(data.error || "Could not create YouTube playlist.");
+    }
+    if (!data.youtubeUrl) {
+      setYouTubeStatus("Playlist created, but no YouTube URL was returned.", "error");
+      return;
+    }
+    const skipped = Number(data.skippedCount || 0);
+    const suffix = skipped > 0 ? ` (${skipped} tracks skipped)` : "";
+    setYouTubeStatus(
+      `YouTube playlist saved with ${Number(data.videoCount || 0)} videos${suffix}.`,
+      "ok",
+      data.youtubeUrl
+    );
+    window.open(data.youtubeUrl, "_blank", "noopener,noreferrer");
+  } catch (err) {
+    setYouTubeStatus(`YouTube save failed: ${err.message}`, "error");
+  } finally {
+    if (els.saveYouTubePlaylist) {
+      els.saveYouTubePlaylist.textContent = originalText;
+    }
+    setYouTubeActionDisabled(state.lastSelectedTracks.length === 0);
   }
 }
 
@@ -1058,6 +1136,9 @@ function init() {
   els.discoveryLevel.addEventListener("input", updateDiscoveryUI);
   els.connectLink.addEventListener("click", handleAuthorizeClick);
   els.disconnectLink.addEventListener("click", handleLogoutClick);
+  if (els.saveYouTubePlaylist) {
+    els.saveYouTubePlaylist.addEventListener("click", handleSaveYouTubePlaylistClick);
+  }
   if (els.makeYouTubePlaylist) {
     els.makeYouTubePlaylist.addEventListener("click", handleMakeYouTubePlaylistClick);
   }

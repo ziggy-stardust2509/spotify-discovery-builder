@@ -8,13 +8,26 @@ import { getConfig } from "./config.js";
 import { PRESETS, parseArtistsAndGenres, syncPlaylist } from "./playlistManager.js";
 import { SpotifyClient } from "./spotify.js";
 import { YouTubeClient, buildSearchLinkFallback } from "./youtube.js";
+import { YouTubeOAuthClient } from "./youtubeOAuth.js";
+
+function parseUrlOrNull(value) {
+  const text = String(value || "").trim();
+  if (!text) return null;
+  try {
+    return new URL(text);
+  } catch {
+    return null;
+  }
+}
 
 const config = getConfig();
 const redirectTarget = new URL(config.redirectUri);
+const youtubeRedirectTarget = parseUrlOrNull(config.youtubeAuthRedirectUri);
 
 const HOST = process.env.HOST || redirectTarget.hostname || "127.0.0.1";
 const PORT = Number(process.env.PORT || redirectTarget.port || 3000);
 const CALLBACK_PATH = redirectTarget.pathname || "/callback";
+const YOUTUBE_CALLBACK_PATH = youtubeRedirectTarget?.pathname || "/auth/youtube/callback";
 const SEARCH_LIMIT_MAX = Number(config.searchLimitMax || 10);
 const WEB_ROOT = path.resolve(process.cwd(), "web");
 const SESSION_DIR = path.resolve(
@@ -25,6 +38,7 @@ const STATE_TTL_MS = 10 * 60 * 1000;
 const SESSION_COOKIE_NAME = "spm_sid";
 const SESSION_COOKIE_TTL_SECONDS = 60 * 60 * 24 * 30;
 const stateStore = new Map();
+const youtubeStateStore = new Map();
 const rateLimitStore = new Map();
 const RATE_LIMIT_WINDOW_MS = 5 * 60 * 1000;
 const RATE_LIMIT_CLEANUP_MS = 60 * 1000;
@@ -53,14 +67,14 @@ function applySecurityHeaders(res) {
     "Content-Security-Policy",
     [
       "default-src 'self'",
-      "connect-src 'self' https://api.spotify.com https://accounts.spotify.com",
+      "connect-src 'self' https://api.spotify.com https://accounts.spotify.com https://www.googleapis.com https://oauth2.googleapis.com",
       "img-src 'self' data: https:",
       "style-src 'self' https://fonts.googleapis.com",
       "font-src 'self' https://fonts.gstatic.com",
       "script-src 'self'",
       "frame-ancestors 'none'",
       "base-uri 'self'",
-      "form-action 'self' https://accounts.spotify.com"
+      "form-action 'self' https://accounts.spotify.com https://accounts.google.com"
     ].join("; ")
   );
 }
@@ -338,6 +352,10 @@ function sessionAuthFile(sessionId) {
   return path.join(SESSION_DIR, `${sessionId}.json`);
 }
 
+function sessionYouTubeAuthFile(sessionId) {
+  return path.join(SESSION_DIR, `${sessionId}.youtube.json`);
+}
+
 function sessionClientConfigFile(sessionId) {
   return path.join(SESSION_DIR, `${sessionId}.client.json`);
 }
@@ -424,6 +442,26 @@ function cleanupExpiredStates() {
       stateStore.delete(state);
     }
   }
+  for (const [state, value] of youtubeStateStore.entries()) {
+    if (now - value.createdAt > STATE_TTL_MS) {
+      youtubeStateStore.delete(state);
+    }
+  }
+}
+
+function buildYouTubeRedirectUri(req) {
+  const configured = String(config.youtubeAuthRedirectUri || "").trim();
+  if (configured) return configured;
+
+  const host = requestHost(req);
+  if (!host) {
+    return `http://${HOST}:${PORT}${YOUTUBE_CALLBACK_PATH}`;
+  }
+  const proto = requestProto(req);
+  if (proto !== "https" && !isLoopbackHost(hostToHostname(host))) {
+    return `https://${host}${YOUTUBE_CALLBACK_PATH}`;
+  }
+  return `${proto}://${host}${YOUTUBE_CALLBACK_PATH}`;
 }
 
 function createAuthorizationUrlForSession(req, sessionId) {
@@ -452,6 +490,40 @@ function createAuthorizationUrlForSession(req, sessionId) {
     redirectUri
   });
   return authorizationUrl;
+}
+
+function createYouTubeAuthorizationUrlForSession(req, sessionId) {
+  const state = crypto.randomBytes(16).toString("hex");
+  const redirectUri = buildYouTubeRedirectUri(req);
+  assertSafeRedirectUri(redirectUri);
+  const youtube = new YouTubeOAuthClient({
+    ...config,
+    redirectUri,
+    authFile: sessionYouTubeAuthFile(sessionId)
+  });
+  if (!youtube.isConfigured()) {
+    throw new Error(
+      "YouTube account save is not configured on this server. Missing YOUTUBE_CLIENT_ID, YOUTUBE_CLIENT_SECRET, or YOUTUBE_OAUTH_REDIRECT_URI."
+    );
+  }
+  youtubeStateStore.set(state, {
+    createdAt: Date.now(),
+    sessionId,
+    redirectUri
+  });
+  return youtube.getAuthorizationUrl(state);
+}
+
+function shouldReauthorizeYouTube(errorMessage) {
+  const text = String(errorMessage || "").toLowerCase();
+  return (
+    text.includes("no youtube refresh token") ||
+    text.includes("invalid_grant") ||
+    text.includes("token refresh failed") ||
+    text.includes("token exchange failed") ||
+    text.includes("unauthenticated") ||
+    text.includes("access token")
+  );
 }
 
 async function readJsonBody(req) {
@@ -803,6 +875,150 @@ async function handleYouTubePlaylist(req, res) {
   }
 }
 
+async function handleYouTubeCreatePlaylist(req, res) {
+  if (!enforceRateLimit(req, res, { bucket: "youtube-save-playlist", max: 12 })) {
+    return;
+  }
+  const sessionId = ensureSessionId(req, res);
+  setSessionCookie(req, res, sessionId);
+
+  let tracks = [];
+  let requestedName = "Discovery Mix";
+  try {
+    const body = await readJsonBody(req);
+    tracks = sanitizeYouTubeTracks(body?.tracks);
+    requestedName = String(body?.name || "Discovery Mix").trim() || "Discovery Mix";
+  } catch (err) {
+    sendJson(res, 400, { error: explainSpotifyIntegrationError(err.message) });
+    return;
+  }
+
+  if (!tracks.length) {
+    sendJson(res, 400, { error: "No tracks available. Build a playlist first." });
+    return;
+  }
+
+  let youtube;
+  try {
+    const redirectUri = buildYouTubeRedirectUri(req);
+    assertSafeRedirectUri(redirectUri);
+    youtube = new YouTubeOAuthClient({
+      ...config,
+      redirectUri,
+      authFile: sessionYouTubeAuthFile(sessionId)
+    });
+  } catch (err) {
+    sendJson(res, 400, { error: explainSpotifyIntegrationError(err.message) });
+    return;
+  }
+
+  if (!youtube.isConfigured()) {
+    sendJson(res, 400, {
+      error:
+        "YouTube account save is not configured on this server. Ask admin to set YOUTUBE_CLIENT_ID, YOUTUBE_CLIENT_SECRET, and YOUTUBE_OAUTH_REDIRECT_URI."
+    });
+    return;
+  }
+
+  if (!youtube.isAuthorized()) {
+    try {
+      const authUrl = createYouTubeAuthorizationUrlForSession(req, sessionId);
+      sendJson(res, 401, {
+        error: "Connect YouTube first to save playlists to your account.",
+        authUrl
+      });
+    } catch (err) {
+      sendJson(res, 400, { error: explainSpotifyIntegrationError(err.message) });
+    }
+    return;
+  }
+
+  try {
+    const result = await youtube.createPlaylistFromTracks(tracks, {
+      name: requestedName
+    });
+    sendJson(res, 200, result);
+  } catch (err) {
+    const message = explainSpotifyIntegrationError(err.message);
+    if (shouldReauthorizeYouTube(err.message)) {
+      removeFileIfExists(sessionYouTubeAuthFile(sessionId));
+      try {
+        const authUrl = createYouTubeAuthorizationUrlForSession(req, sessionId);
+        sendJson(res, 401, {
+          error: "YouTube session expired. Reconnect YouTube to continue.",
+          authUrl
+        });
+        return;
+      } catch {
+        // Fall through and return original error.
+      }
+    }
+    sendJson(res, 400, { error: message });
+  }
+}
+
+async function handleYouTubeAuthLogin(req, res) {
+  cleanupExpiredStates();
+  if (!enforceRateLimit(req, res, { bucket: "youtube-auth-login", max: 18 })) {
+    return;
+  }
+  const sessionId = ensureSessionId(req, res);
+  setSessionCookie(req, res, sessionId);
+  try {
+    const authorizationUrl = createYouTubeAuthorizationUrlForSession(req, sessionId);
+    redirect(res, authorizationUrl);
+  } catch (err) {
+    redirectToApp(res, {
+      youtube_auth_error: explainSpotifyIntegrationError(err.message)
+    });
+  }
+}
+
+async function handleYouTubeAuthCallback(req, reqUrl, res) {
+  const code = reqUrl.searchParams.get("code");
+  const state = reqUrl.searchParams.get("state");
+  const error = reqUrl.searchParams.get("error");
+  const errorDescription = reqUrl.searchParams.get("error_description");
+
+  if (error) {
+    const detail = String(errorDescription || "").replace(/\+/g, " ").trim();
+    const combined = detail ? `${error}: ${detail}` : error;
+    redirectToApp(res, {
+      youtube_auth_error: explainSpotifyIntegrationError(combined)
+    });
+    return;
+  }
+
+  const stateValue = state ? youtubeStateStore.get(state) : null;
+  const stateExpired = stateValue
+    ? Date.now() - stateValue.createdAt > STATE_TTL_MS
+    : true;
+  if (!code || !state || !stateValue || stateExpired) {
+    if (state) youtubeStateStore.delete(state);
+    redirectToApp(res, {
+      youtube_auth_error: "YouTube login expired or is invalid. Try Connect YouTube again."
+    });
+    return;
+  }
+
+  youtubeStateStore.delete(state);
+  const sessionId = stateValue.sessionId;
+  const youtube = new YouTubeOAuthClient({
+    ...config,
+    redirectUri: stateValue.redirectUri || buildYouTubeRedirectUri(req),
+    authFile: sessionYouTubeAuthFile(sessionId)
+  });
+  try {
+    await youtube.exchangeCodeForToken(code);
+    setSessionCookie(req, res, sessionId);
+    redirectToApp(res, { youtube_connected: "1" });
+  } catch (err) {
+    redirectToApp(res, {
+      youtube_auth_error: explainSpotifyIntegrationError(err.message)
+    });
+  }
+}
+
 async function handleAuthLogin(_req, res) {
   cleanupExpiredStates();
   const req = _req;
@@ -894,6 +1110,7 @@ function handleAuthLogout(req, res) {
   if (sessionId) {
     removeFileIfExists(sessionAuthFile(sessionId));
     removeFileIfExists(sessionClientConfigFile(sessionId));
+    removeFileIfExists(sessionYouTubeAuthFile(sessionId));
   }
   clearSessionCookie(req, res);
   redirect(res, "/?logged_out=1");
@@ -907,6 +1124,7 @@ function handleAuthLogoutApi(req, res) {
   if (!sessionId) return;
   removeFileIfExists(sessionAuthFile(sessionId));
   removeFileIfExists(sessionClientConfigFile(sessionId));
+  removeFileIfExists(sessionYouTubeAuthFile(sessionId));
   clearSessionCookie(req, res);
   sendJson(res, 200, { ok: true });
 }
@@ -941,6 +1159,12 @@ function serveStatic(reqUrl, res) {
 const server = http.createServer(async (req, res) => {
   const reqUrl = new URL(req.url, `http://${req.headers.host}`);
   const normalizedPath = normalizePathname(reqUrl.pathname);
+  const spotifyCallbackPath = normalizePathname(CALLBACK_PATH);
+  const youtubeCallbackPath = normalizePathname(YOUTUBE_CALLBACK_PATH);
+  const callbackState = reqUrl.searchParams.get("state");
+  const hasSpotifyState = Boolean(callbackState && stateStore.has(callbackState));
+  const hasYouTubeState = Boolean(callbackState && youtubeStateStore.has(callbackState));
+  const callbacksSharePath = spotifyCallbackPath === youtubeCallbackPath;
   applyTransportSecurityHeaders(req, res);
 
   const forceHttpsRedirect = process.env.SPM_FORCE_HTTPS_REDIRECT === "true";
@@ -1004,6 +1228,11 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (req.method === "POST" && normalizedPath === "/api/youtube/create-playlist") {
+    await handleYouTubeCreatePlaylist(req, res);
+    return;
+  }
+
   if (req.method === "GET" && normalizedPath === "/api/auth/login-url") {
     await handleAuthLoginUrl(req, res);
     return;
@@ -1024,12 +1253,34 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (req.method === "GET" && normalizedPath === "/auth/youtube/login") {
+    await handleYouTubeAuthLogin(req, res);
+    return;
+  }
+
+  if (req.method === "GET" && normalizedPath === youtubeCallbackPath) {
+    if (callbacksSharePath && !hasYouTubeState && hasSpotifyState) {
+      await handleAuthCallback(req, reqUrl, res);
+      return;
+    }
+    if (callbacksSharePath && !hasYouTubeState && !hasSpotifyState) {
+      await handleAuthCallback(req, reqUrl, res);
+      return;
+    }
+    await handleYouTubeAuthCallback(req, reqUrl, res);
+    return;
+  }
+
   if (req.method === "GET" && normalizedPath === "/auth/callback") {
     await handleAuthCallback(req, reqUrl, res);
     return;
   }
 
-  if (req.method === "GET" && normalizedPath === normalizePathname(CALLBACK_PATH)) {
+  if (req.method === "GET" && normalizedPath === spotifyCallbackPath) {
+    if (callbacksSharePath && hasYouTubeState && !hasSpotifyState) {
+      await handleYouTubeAuthCallback(req, reqUrl, res);
+      return;
+    }
     await handleAuthCallback(req, reqUrl, res);
     return;
   }
@@ -1048,5 +1299,8 @@ server.listen(PORT, HOST, () => {
   console.log(`Session storage: ${SESSION_DIR}`);
   if (CALLBACK_PATH !== "/auth/callback") {
     console.log(`Callback path mapped to: ${CALLBACK_PATH}`);
+  }
+  if (YOUTUBE_CALLBACK_PATH !== "/auth/youtube/callback") {
+    console.log(`YouTube callback path mapped to: ${YOUTUBE_CALLBACK_PATH}`);
   }
 });
