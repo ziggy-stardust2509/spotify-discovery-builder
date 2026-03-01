@@ -35,7 +35,7 @@ const youtubeRedirectTarget = parseUrlOrNull(config.youtubeAuthRedirectUri);
 const APP_BASE_PATH = normalizeBasePath(process.env.SPM_BASE_PATH || "/spotifried");
 const REDIRECT_ROOT_TO_BASE =
   APP_BASE_PATH &&
-  String(process.env.SPM_REDIRECT_ROOT_TO_BASE || "true").trim().toLowerCase() !== "false";
+  String(process.env.SPM_REDIRECT_ROOT_TO_BASE || "false").trim().toLowerCase() === "true";
 const HOST = process.env.HOST || redirectTarget.hostname || "127.0.0.1";
 const PORT = Number(process.env.PORT || redirectTarget.port || 3000);
 const CALLBACK_PATH = redirectTarget.pathname || "/callback";
@@ -1277,8 +1277,12 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (REDIRECT_ROOT_TO_BASE && rawPath === "/") {
-    redirect(res, withAppBasePath("/"));
+  if (APP_BASE_PATH && (rawPath === "/" || rawPath === "/index.html")) {
+    if (REDIRECT_ROOT_TO_BASE) {
+      redirect(res, withAppBasePath("/"));
+      return;
+    }
+    sendText(res, 404, `Not found. Use ${withAppBasePath("/")}`);
     return;
   }
 
@@ -1404,5 +1408,7 @@ server.listen(PORT, HOST, () => {
   }
   if (REDIRECT_ROOT_TO_BASE) {
     console.log(`Root path redirects to: ${withAppBasePath("/")}`);
+  } else if (APP_BASE_PATH) {
+    console.log(`Root path is disabled. Use: ${withAppBasePath("/")}`);
   }
 });
