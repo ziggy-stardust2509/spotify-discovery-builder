@@ -97,6 +97,12 @@ body {
   background: rgba(14, 32, 27, 0.55);
 }
 
+.tag-hot {
+  border-color: rgba(255, 210, 111, 0.55);
+  background: rgba(38, 28, 10, 0.52);
+  color: #ffe6b5;
+}
+
 .panel-header {
   display: flex;
   justify-content: space-between;
@@ -267,6 +273,14 @@ input[type="range"] {
   border-radius: 14px;
   padding: 0.7rem 0.8rem;
   background: linear-gradient(150deg, rgba(10, 19, 17, 0.78), rgba(12, 25, 22, 0.6));
+}
+
+.youtube-direct-box {
+  margin: 0.25rem 0 0.1rem;
+  border: 1px solid rgba(242, 169, 59, 0.42);
+  border-radius: 14px;
+  padding: 0.7rem 0.8rem;
+  background: linear-gradient(155deg, rgba(38, 26, 13, 0.72), rgba(19, 27, 25, 0.74));
 }
 
 .setup-guide h3 {

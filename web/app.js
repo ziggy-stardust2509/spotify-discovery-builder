@@ -50,6 +50,12 @@ const els = {
   useHostedDefaults: document.querySelector("#use-hosted-defaults"),
   connectLink: document.querySelector("#connect-link"),
   disconnectLink: document.querySelector("#disconnect-link"),
+  youtubeDirectName: document.querySelector("#youtube-direct-name"),
+  youtubeDirectTracks: document.querySelector("#youtube-direct-tracks"),
+  saveYouTubeDirect: document.querySelector("#save-youtube-direct"),
+  buildYouTubeDirect: document.querySelector("#build-youtube-direct"),
+  youtubeDirectStatus: document.querySelector("#youtube-direct-status"),
+  youtubeDirectLinkList: document.querySelector("#youtube-direct-link-list"),
   statusPill: document.querySelector("#status-pill"),
   statusText: document.querySelector("#status-text"),
   resultSummary: document.querySelector("#result-summary"),
@@ -249,6 +255,31 @@ function setYouTubeStatus(text, kind = "neutral", linkUrl = null, linkLabel = "O
   }
 }
 
+function setYouTubeDirectStatus(
+  text,
+  kind = "neutral",
+  linkUrl = null,
+  linkLabel = "Open YouTube playlist"
+) {
+  if (!els.youtubeDirectStatus) return;
+  els.youtubeDirectStatus.textContent = text;
+  els.youtubeDirectStatus.classList.remove("state-error", "state-ok");
+  if (kind === "error") {
+    els.youtubeDirectStatus.classList.add("state-error");
+  } else if (kind === "ok") {
+    els.youtubeDirectStatus.classList.add("state-ok");
+  }
+  if (linkUrl) {
+    els.youtubeDirectStatus.append(document.createTextNode(" "));
+    const link = document.createElement("a");
+    link.href = linkUrl;
+    link.target = "_blank";
+    link.rel = "noreferrer";
+    link.textContent = linkLabel;
+    els.youtubeDirectStatus.append(link);
+  }
+}
+
 function setYouTubeActionDisabled(disabled) {
   const value = Boolean(disabled);
   if (els.makeYouTubePlaylist) {
@@ -259,9 +290,9 @@ function setYouTubeActionDisabled(disabled) {
   }
 }
 
-function renderYouTubeLinks(links = []) {
-  if (!els.youtubeLinkList) return;
-  els.youtubeLinkList.innerHTML = "";
+function renderYouTubeLinks(links = [], targetList = els.youtubeLinkList) {
+  if (!targetList) return;
+  targetList.innerHTML = "";
   for (const item of links.slice(0, 20)) {
     const li = document.createElement("li");
     const artistText = Array.isArray(item?.artists) ? item.artists.join(", ") : "";
@@ -271,7 +302,7 @@ function renderYouTubeLinks(links = []) {
     link.rel = "noreferrer";
     link.textContent = item.name || "Open YouTube search";
     li.append(link, document.createTextNode(artistText ? ` — ${artistText}` : ""));
-    els.youtubeLinkList.append(li);
+    targetList.append(li);
   }
 }
 
@@ -830,8 +861,10 @@ function applyAuthResultFromQuery() {
 
   if (youtubeAuthError) {
     setYouTubeStatus(`YouTube login failed: ${youtubeAuthError}`, "error");
+    setYouTubeDirectStatus(`YouTube login failed: ${youtubeAuthError}`, "error");
   } else if (youtubeConnected === "1") {
     setYouTubeStatus("YouTube connected. Click Save To YouTube Account to create a playlist.", "ok");
+    setYouTubeDirectStatus("YouTube connected. Click Save To YouTube Account to create a playlist.", "ok");
   }
 
   if (connected || loggedOut || authError || youtubeConnected || youtubeAuthError) {
@@ -1049,6 +1082,153 @@ async function handleSaveYouTubePlaylistClick(event) {
   }
 }
 
+function parseDirectTracksInput(text) {
+  const lines = String(text || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const tracks = [];
+  for (const line of lines.slice(0, 50)) {
+    let name = line;
+    let artists = [];
+
+    if (line.includes(" - ")) {
+      const [artistPart, ...nameParts] = line.split(" - ");
+      const parsedName = nameParts.join(" - ").trim();
+      if (parsedName) {
+        name = parsedName;
+        artists = artistPart
+          .split(",")
+          .map((value) => value.trim())
+          .filter(Boolean);
+      }
+    } else if (/\s+by\s+/i.test(line)) {
+      const [namePart, ...artistParts] = line.split(/\s+by\s+/i);
+      const parsedName = String(namePart || "").trim();
+      const parsedArtist = artistParts.join(" by ").trim();
+      if (parsedName) {
+        name = parsedName;
+      }
+      if (parsedArtist) {
+        artists = parsedArtist
+          .split(",")
+          .map((value) => value.trim())
+          .filter(Boolean);
+      }
+    }
+
+    if (!name) continue;
+    tracks.push({ name, artists });
+  }
+  return tracks;
+}
+
+function setYouTubeDirectBusy(busy, buildLabel, saveLabel) {
+  if (els.buildYouTubeDirect) {
+    els.buildYouTubeDirect.disabled = busy;
+    els.buildYouTubeDirect.textContent = buildLabel;
+  }
+  if (els.saveYouTubeDirect) {
+    els.saveYouTubeDirect.disabled = busy;
+    els.saveYouTubeDirect.textContent = saveLabel;
+  }
+}
+
+function readYouTubeDirectInput() {
+  const tracks = parseDirectTracksInput(els.youtubeDirectTracks?.value || "");
+  const name = String(els.youtubeDirectName?.value || "Discovery Mix").trim() || "Discovery Mix";
+  return { tracks, name };
+}
+
+async function handleBuildYouTubeDirectClick(event) {
+  event.preventDefault();
+  const { tracks, name } = readYouTubeDirectInput();
+  if (!tracks.length) {
+    setYouTubeDirectStatus("Add at least one song line first (Artist - Song).", "error");
+    return;
+  }
+  renderYouTubeLinks([], els.youtubeDirectLinkList);
+  setYouTubeDirectBusy(true, "Building links...", "Save To YouTube Account");
+  setYouTubeDirectStatus("Matching songs on YouTube...");
+  try {
+    const response = await apiFetch("/api/youtube/playlist", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, tracks })
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || "Could not build YouTube links.");
+    }
+    if (data.mode === "search_links") {
+      const links = Array.isArray(data.searchLinks) ? data.searchLinks : [];
+      renderYouTubeLinks(links, els.youtubeDirectLinkList);
+      setYouTubeDirectStatus(
+        `Built ${links.length} YouTube search links.`,
+        "ok",
+        links[0]?.youtubeUrl || data.youtubeUrl,
+        "Open first link"
+      );
+      return;
+    }
+    if (!data.youtubeUrl) {
+      throw new Error("No YouTube link was generated.");
+    }
+    renderYouTubeLinks([], els.youtubeDirectLinkList);
+    setYouTubeDirectStatus(
+      `Built YouTube watch list with ${Number(data.videoCount || 0)} videos.`,
+      "ok",
+      data.youtubeUrl
+    );
+    window.open(data.youtubeUrl, "_blank", "noopener,noreferrer");
+  } catch (err) {
+    setYouTubeDirectStatus(`YouTube build failed: ${err.message}`, "error");
+  } finally {
+    setYouTubeDirectBusy(false, "Get YouTube Links (No Login)", "Save To YouTube Account");
+  }
+}
+
+async function handleSaveYouTubeDirectClick(event) {
+  event.preventDefault();
+  const { tracks, name } = readYouTubeDirectInput();
+  if (!tracks.length) {
+    setYouTubeDirectStatus("Add at least one song line first (Artist - Song).", "error");
+    return;
+  }
+  renderYouTubeLinks([], els.youtubeDirectLinkList);
+  setYouTubeDirectBusy(true, "Get YouTube Links (No Login)", "Saving...");
+  setYouTubeDirectStatus("Saving playlist to your YouTube account...");
+  try {
+    const response = await apiFetch("/api/youtube/create-playlist", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, tracks })
+    });
+    const data = await response.json();
+    if (response.status === 401 && data?.authUrl) {
+      window.location.assign(data.authUrl);
+      return;
+    }
+    if (!response.ok) {
+      throw new Error(data.error || "Could not save YouTube playlist.");
+    }
+    const skipped = Number(data.skippedCount || 0);
+    const suffix = skipped > 0 ? ` (${skipped} tracks skipped)` : "";
+    setYouTubeDirectStatus(
+      `YouTube playlist saved with ${Number(data.videoCount || 0)} videos${suffix}.`,
+      "ok",
+      data.youtubeUrl
+    );
+    if (data.youtubeUrl) {
+      window.open(data.youtubeUrl, "_blank", "noopener,noreferrer");
+    }
+  } catch (err) {
+    setYouTubeDirectStatus(`YouTube save failed: ${err.message}`, "error");
+  } finally {
+    setYouTubeDirectBusy(false, "Get YouTube Links (No Login)", "Save To YouTube Account");
+  }
+}
+
 async function submitForm(event) {
   event.preventDefault();
   els.submit.disabled = true;
@@ -1136,6 +1316,12 @@ function init() {
   els.discoveryLevel.addEventListener("input", updateDiscoveryUI);
   els.connectLink.addEventListener("click", handleAuthorizeClick);
   els.disconnectLink.addEventListener("click", handleLogoutClick);
+  if (els.buildYouTubeDirect) {
+    els.buildYouTubeDirect.addEventListener("click", handleBuildYouTubeDirectClick);
+  }
+  if (els.saveYouTubeDirect) {
+    els.saveYouTubeDirect.addEventListener("click", handleSaveYouTubeDirectClick);
+  }
   if (els.saveYouTubePlaylist) {
     els.saveYouTubePlaylist.addEventListener("click", handleSaveYouTubePlaylistClick);
   }
