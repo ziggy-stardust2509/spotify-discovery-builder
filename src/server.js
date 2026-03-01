@@ -558,6 +558,12 @@ function explainSpotifyIntegrationError(errorMessage) {
   }
 
   if (lower.includes("token exchange failed") || lower.includes("token refresh failed")) {
+    if (lower.includes("invalid_client") || lower.includes("invalid client")) {
+      return "Invalid Spotify app credentials. For PKCE, use Client ID only and leave Client Secret blank. For Standard mode, ensure Client ID and Client Secret match the same Spotify app.";
+    }
+    if (lower.includes("code_verifier") || lower.includes("code verifier")) {
+      return "PKCE verification failed. Start authorization again from this tab and complete Spotify login without reopening old callback links.";
+    }
     return "Spotify authorization failed. Reconnect Spotify and confirm redirect URI/scopes are correct.";
   }
 
@@ -668,8 +674,9 @@ async function handleClientConfigSave(req, res) {
     if (!sessionId) return;
     setSessionCookie(req, res, sessionId);
     const clientId = String(body.clientId || "").trim();
-    const clientSecret = String(body.clientSecret || "").trim();
     const authMode = normalizeAuthMode(body.authMode, config.authMode);
+    const clientSecretInput = String(body.clientSecret || "").trim();
+    const clientSecret = authMode === "standard" ? clientSecretInput : "";
 
     if (!clientId) {
       sendJson(res, 400, { error: "Client ID is required." });
@@ -887,6 +894,7 @@ const server = http.createServer(async (req, res) => {
   const normalizedPath = normalizePathname(reqUrl.pathname);
   applyTransportSecurityHeaders(req, res);
 
+  const forceHttpsRedirect = process.env.SPM_FORCE_HTTPS_REDIRECT === "true";
   const proto = requestProto(req);
   const host = requestHost(req);
   const forwardedProto = firstForwardedHeaderValue(req.headers["x-forwarded-proto"]).toLowerCase();
@@ -895,12 +903,13 @@ const server = http.createServer(async (req, res) => {
   const canForceHttpsRedirect = !isProxiedRequest || forwardedProto === "http";
 
   if (
+    forceHttpsRedirect &&
     proto === "http" &&
     host &&
     !isLoopbackHost(hostToHostname(host)) &&
     canForceHttpsRedirect
   ) {
-    // Avoid infinite redirects when a TLS proxy omits x-forwarded-proto.
+    // Keep this opt-in because many shared-host proxies omit forwarded headers.
     const httpsLocation = `https://${host}${reqUrl.pathname}${reqUrl.search}`;
     redirect(res, httpsLocation);
     return;

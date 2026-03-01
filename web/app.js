@@ -34,7 +34,14 @@ const els = {
   callbackUri: document.querySelector("#callback-uri"),
   advancedCredentials: document.querySelector("#advanced-credentials"),
   clientConfigNote: document.querySelector("#client-config-note"),
+  keyImportNote: document.querySelector("#key-import-note"),
+  keyFile: document.querySelector("#key-file"),
+  keyPaste: document.querySelector("#key-paste"),
+  importKeyFile: document.querySelector("#import-key-file"),
+  importKeyPaste: document.querySelector("#import-key-paste"),
+  copyCallback: document.querySelector("#copy-callback"),
   saveClientConfig: document.querySelector("#save-client-config"),
+  saveAndConnect: document.querySelector("#save-and-connect"),
   clearClientConfig: document.querySelector("#clear-client-config"),
   useHostedDefaults: document.querySelector("#use-hosted-defaults"),
   connectLink: document.querySelector("#connect-link"),
@@ -203,6 +210,195 @@ function setClientConfigNote(text) {
   els.clientConfigNote.textContent = text;
 }
 
+function setKeyImportNote(text, kind = "neutral") {
+  if (!els.keyImportNote) return;
+  els.keyImportNote.textContent = text;
+  els.keyImportNote.classList.remove("state-error", "state-ok");
+  if (kind === "error") {
+    els.keyImportNote.classList.add("state-error");
+  } else if (kind === "ok") {
+    els.keyImportNote.classList.add("state-ok");
+  }
+}
+
+function stripWrappingQuotes(value) {
+  const text = String(value ?? "").trim();
+  if (!text) return "";
+  if (
+    (text.startsWith('"') && text.endsWith('"')) ||
+    (text.startsWith("'") && text.endsWith("'")) ||
+    (text.startsWith("`") && text.endsWith("`"))
+  ) {
+    return text.slice(1, -1).trim();
+  }
+  return text;
+}
+
+function parseEnvLikeText(text) {
+  const result = {};
+  const lines = String(text || "").split(/\r?\n/);
+  for (const rawLine of lines) {
+    const trimmed = rawLine.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const line = trimmed.startsWith("export ") ? trimmed.slice(7).trim() : trimmed;
+    const eq = line.indexOf("=");
+    if (eq === -1) continue;
+    const key = line.slice(0, eq).trim();
+    if (!key) continue;
+    let value = line.slice(eq + 1).trim();
+    value = stripWrappingQuotes(value);
+    result[key] = value;
+  }
+  return result;
+}
+
+function flattenObjectEntries(value, output = {}) {
+  if (!value || typeof value !== "object") return output;
+  for (const [key, entry] of Object.entries(value)) {
+    if (entry === null || entry === undefined) continue;
+    if (typeof entry === "object" && !Array.isArray(entry)) {
+      flattenObjectEntries(entry, output);
+      continue;
+    }
+    output[key] = String(entry).trim();
+  }
+  return output;
+}
+
+function normalizeImportedCredentials(parsed) {
+  const lower = new Map(
+    Object.entries(parsed || {})
+      .map(([key, value]) => [String(key || "").toLowerCase(), String(value || "").trim()])
+      .filter(([, value]) => Boolean(value))
+  );
+  const pick = (...keys) => {
+    for (const key of keys) {
+      const found = lower.get(key.toLowerCase());
+      if (found) return found;
+    }
+    return "";
+  };
+
+  const clientId = pick("spotify_client_id", "client_id", "clientid", "spotifyclientid");
+  const clientSecret = pick(
+    "spotify_client_secret",
+    "client_secret",
+    "clientsecret",
+    "spotifyclientsecret"
+  );
+  const rawAuthMode = pick("spotify_auth_mode", "auth_mode", "authmode").toLowerCase();
+  const authMode = rawAuthMode === "standard" || rawAuthMode === "pkce"
+    ? rawAuthMode
+    : clientSecret
+      ? "standard"
+      : "pkce";
+
+  if (!clientId) {
+    throw new Error("No Spotify Client ID found. Include SPOTIFY_CLIENT_ID or clientId.");
+  }
+
+  return {
+    clientId,
+    clientSecret,
+    authMode
+  };
+}
+
+function parseImportedCredentialsText(text) {
+  const rawText = String(text || "").trim();
+  if (!rawText) {
+    throw new Error("No key data found.");
+  }
+
+  const envParsed = parseEnvLikeText(rawText);
+  let jsonParsed = {};
+  try {
+    const parsedJson = JSON.parse(rawText);
+    jsonParsed = flattenObjectEntries(parsedJson);
+  } catch {
+    jsonParsed = {};
+  }
+
+  return normalizeImportedCredentials({
+    ...jsonParsed,
+    ...envParsed
+  });
+}
+
+function applyImportedCredentials(credentials, sourceLabel) {
+  els.clientId.value = credentials.clientId;
+  els.clientSecret.value = credentials.clientSecret || "";
+  els.authMode.value = credentials.authMode;
+  applyAuthModeUI();
+  if (els.advancedCredentials) {
+    els.advancedCredentials.open = true;
+  }
+  setKeyImportNote(
+    `Imported Client ID${credentials.clientSecret ? " + secret" : ""} from ${sourceLabel}.`,
+    "ok"
+  );
+  setClientConfigNote(`Imported from ${sourceLabel}. Click Save + Connect Spotify.`);
+  setStatus("neutral", "Keys loaded. Save + Connect Spotify.");
+}
+
+async function copyTextToClipboard(text) {
+  if (globalThis.navigator?.clipboard?.writeText) {
+    await globalThis.navigator.clipboard.writeText(text);
+    return;
+  }
+  const area = document.createElement("textarea");
+  area.value = text;
+  area.setAttribute("readonly", "true");
+  area.style.position = "absolute";
+  area.style.left = "-9999px";
+  document.body.appendChild(area);
+  area.select();
+  document.execCommand("copy");
+  document.body.removeChild(area);
+}
+
+async function handleCopyCallbackClick(event) {
+  event.preventDefault();
+  const callback = String(els.callbackUri?.textContent || "").trim();
+  if (!callback) {
+    setKeyImportNote("Callback URL unavailable on this page.", "error");
+    return;
+  }
+  try {
+    await copyTextToClipboard(callback);
+    setKeyImportNote("Callback URL copied.", "ok");
+  } catch (err) {
+    setKeyImportNote(`Could not copy callback URL: ${err.message}`, "error");
+  }
+}
+
+async function handleImportKeyFileClick(event) {
+  event.preventDefault();
+  const file = els.keyFile?.files?.[0];
+  if (!file) {
+    setKeyImportNote("Select a file first (.env, .txt, or .json).", "error");
+    return;
+  }
+  try {
+    const text = await file.text();
+    const imported = parseImportedCredentialsText(text);
+    applyImportedCredentials(imported, `file "${file.name}"`);
+  } catch (err) {
+    setKeyImportNote(`Import failed: ${err.message}`, "error");
+  }
+}
+
+function handleImportKeyPasteClick(event) {
+  event.preventDefault();
+  const text = els.keyPaste?.value || "";
+  try {
+    const imported = parseImportedCredentialsText(text);
+    applyImportedCredentials(imported, "pasted text");
+  } catch (err) {
+    setKeyImportNote(`Import failed: ${err.message}`, "error");
+  }
+}
+
 async function handleAuthorizeClick(event) {
   event.preventDefault();
   const originalText = els.connectLink.textContent;
@@ -254,10 +450,15 @@ async function handleLogoutClick(event) {
 function applyAuthModeUI() {
   const mode = els.authMode.value;
   const requiresSecret = mode === "standard";
+  if (!requiresSecret) {
+    // Prevent stale/wrong secrets from breaking PKCE token exchange.
+    els.clientSecret.value = "";
+  }
   els.clientSecret.required = requiresSecret;
+  els.clientSecret.disabled = !requiresSecret;
   els.clientSecret.placeholder = requiresSecret
     ? "Required for standard mode"
-    : "Optional in PKCE mode";
+    : "Not used in PKCE mode";
 }
 
 function applyPresetToForm(name) {
@@ -380,14 +581,14 @@ async function loadClientConfig() {
 
   const sourceText =
     data.source === "session"
-      ? "Using your custom app keys for this browser session."
-      : "Using hosted app credentials (no personal API key needed).";
+      ? "Using your saved Spotify app keys for this browser session."
+      : "Using hosted app credentials (fallback mode).";
   const warning = isPublicNonHttpsUrl(data.redirectUri)
     ? " Warning: callback is not HTTPS; Spotify auth may appear unsafe or fail."
     : "";
   const hostedHint =
     data.source === "server"
-      ? " If Spotify blocks login, ask the app owner to add your account in Spotify Dashboard > Users and Access, or use your own keys."
+      ? " If hosted login fails, save your own app keys above."
       : "";
   const storageHint = !state.sessionStorageReady
     ? " Browser storage is unavailable, so this tab is using a cookie-based session."
@@ -396,19 +597,31 @@ async function loadClientConfig() {
     `${sourceText} Redirect URI: ${data.redirectUri}.${warning}${hostedHint}${storageHint}`
   );
   if (els.advancedCredentials) {
-    els.advancedCredentials.open = data.source === "session";
+    els.advancedCredentials.open = true;
   }
 }
 
 async function saveClientConfig(event) {
   event.preventDefault();
+  const submitterId = String(event.submitter?.id || "");
+  const shouldConnect = submitterId === "save-and-connect";
+  const saveOriginalText = els.saveClientConfig.textContent;
+  const saveAndConnectOriginalText = els.saveAndConnect?.textContent || "Save + Connect Spotify";
   els.saveClientConfig.disabled = true;
-  els.saveClientConfig.textContent = "Saving...";
+  if (els.saveAndConnect) {
+    els.saveAndConnect.disabled = true;
+  }
+  if (shouldConnect && els.saveAndConnect) {
+    els.saveAndConnect.textContent = "Saving + Connecting...";
+  } else {
+    els.saveClientConfig.textContent = "Saving...";
+  }
 
+  const authMode = els.authMode.value;
   const payload = {
     clientId: els.clientId.value.trim(),
-    clientSecret: els.clientSecret.value.trim(),
-    authMode: els.authMode.value
+    clientSecret: authMode === "standard" ? els.clientSecret.value.trim() : "",
+    authMode
   };
 
   try {
@@ -426,12 +639,20 @@ async function saveClientConfig(event) {
     if (els.clientId.value.trim() !== payload.clientId) {
       throw new Error("Session did not persist. Open app over HTTPS and allow cookies.");
     }
-    setStatus("neutral", "App keys saved. Click Authorize Spotify.");
+    if (shouldConnect) {
+      window.location.assign("/auth/login");
+      return;
+    }
+    setStatus("neutral", "Keys saved. Click Authorize Spotify.");
   } catch (err) {
     setClientConfigNote(`Credential save failed: ${err.message}`);
   } finally {
     els.saveClientConfig.disabled = false;
-    els.saveClientConfig.textContent = "Save App Keys";
+    if (els.saveAndConnect) {
+      els.saveAndConnect.disabled = false;
+      els.saveAndConnect.textContent = saveAndConnectOriginalText;
+    }
+    els.saveClientConfig.textContent = saveOriginalText;
   }
 }
 
@@ -456,7 +677,7 @@ async function handleUseHostedDefaultsClick(event) {
   event.preventDefault();
   await clearClientConfig();
   if (els.advancedCredentials) {
-    els.advancedCredentials.open = false;
+    els.advancedCredentials.open = true;
   }
 }
 
@@ -598,6 +819,7 @@ function init() {
   if (els.callbackUri) {
     els.callbackUri.textContent = `${window.location.origin}/callback`;
   }
+  setKeyImportNote("No key data imported yet.");
   els.preset.addEventListener("change", () => {
     if (!els.preset.value) {
       clearCustomTemplateTextFields();
@@ -610,6 +832,15 @@ function init() {
   els.refreshStatus.addEventListener("click", handleRefreshStatusClick);
   els.clientConfigForm.addEventListener("submit", saveClientConfig);
   els.clearClientConfig.addEventListener("click", clearClientConfig);
+  if (els.copyCallback) {
+    els.copyCallback.addEventListener("click", handleCopyCallbackClick);
+  }
+  if (els.importKeyFile) {
+    els.importKeyFile.addEventListener("click", handleImportKeyFileClick);
+  }
+  if (els.importKeyPaste) {
+    els.importKeyPaste.addEventListener("click", handleImportKeyPasteClick);
+  }
   if (els.useHostedDefaults) {
     els.useHostedDefaults.addEventListener("click", handleUseHostedDefaultsClick);
   }
