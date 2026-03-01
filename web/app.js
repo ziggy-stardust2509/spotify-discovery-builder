@@ -1,7 +1,8 @@
 const state = {
   presets: {},
   sessionId: null,
-  sessionStorageReady: true
+  sessionStorageReady: true,
+  loadedClientConfig: null
 };
 
 const PREFILL_CLEAR_IDS = ["name", "seedSong", "prompt", "artists", "genres"];
@@ -210,6 +211,43 @@ function setClientConfigNote(text) {
   els.clientConfigNote.textContent = text;
 }
 
+function buildClientConfigPayload() {
+  const authMode = els.authMode?.value || "pkce";
+  return {
+    clientId: String(els.clientId?.value || "").trim(),
+    clientSecret: authMode === "standard" ? String(els.clientSecret?.value || "").trim() : "",
+    authMode
+  };
+}
+
+function shouldSaveClientConfig(payload) {
+  const baseline = state.loadedClientConfig;
+  if (!payload.clientId) return false;
+  if (!baseline) return true;
+  if (payload.clientId !== baseline.clientId) return true;
+  if (payload.authMode !== baseline.authMode) return true;
+  if (payload.authMode === "standard" && payload.clientSecret) return true;
+  return false;
+}
+
+async function saveClientConfigIfNeeded() {
+  const payload = buildClientConfigPayload();
+  if (!shouldSaveClientConfig(payload)) return;
+  const response = await apiFetch("/api/client-config", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.error || "Failed to save credentials.");
+  }
+  if (els.clientSecret) {
+    els.clientSecret.value = "";
+  }
+  await loadClientConfig();
+}
+
 function setKeyImportNote(text, kind = "neutral") {
   if (!els.keyImportNote) return;
   els.keyImportNote.textContent = text;
@@ -406,6 +444,7 @@ async function handleAuthorizeClick(event) {
   els.connectLink.setAttribute("aria-disabled", "true");
   els.connectLink.style.pointerEvents = "none";
   try {
+    await saveClientConfigIfNeeded();
     const response = await apiFetch("/api/auth/login-url");
     const data = await response.json();
     if (!response.ok || !data.authorizationUrl) {
@@ -577,18 +616,23 @@ async function loadClientConfig() {
   els.clientId.value = data.clientId || "";
   els.authMode.value = data.authMode || "pkce";
   els.clientSecret.value = "";
+  state.loadedClientConfig = {
+    clientId: data.clientId || "",
+    authMode: data.authMode || "pkce",
+    source: data.source || "server"
+  };
   applyAuthModeUI();
 
   const sourceText =
     data.source === "session"
-      ? "Using your saved Spotify app keys for this browser session."
-      : "Using hosted app credentials (fallback mode).";
+      ? "Using your saved app keys for this browser session."
+      : "Using hosted app (no key required).";
   const warning = isPublicNonHttpsUrl(data.redirectUri)
     ? " Warning: callback is not HTTPS; Spotify auth may appear unsafe or fail."
     : "";
   const hostedHint =
     data.source === "server"
-      ? " If hosted login fails, save your own app keys above."
+      ? " If hosted login fails, open advanced settings and enter your own Client ID."
       : "";
   const storageHint = !state.sessionStorageReady
     ? " Browser storage is unavailable, so this tab is using a cookie-based session."
@@ -597,7 +641,7 @@ async function loadClientConfig() {
     `${sourceText} Redirect URI: ${data.redirectUri}.${warning}${hostedHint}${storageHint}`
   );
   if (els.advancedCredentials) {
-    els.advancedCredentials.open = true;
+    els.advancedCredentials.open = false;
   }
 }
 
@@ -830,8 +874,12 @@ function init() {
   });
   els.form.addEventListener("submit", submitForm);
   els.refreshStatus.addEventListener("click", handleRefreshStatusClick);
-  els.clientConfigForm.addEventListener("submit", saveClientConfig);
-  els.clearClientConfig.addEventListener("click", clearClientConfig);
+  if (els.clientConfigForm) {
+    els.clientConfigForm.addEventListener("submit", (event) => event.preventDefault());
+  }
+  if (els.clearClientConfig) {
+    els.clearClientConfig.addEventListener("click", clearClientConfig);
+  }
   if (els.copyCallback) {
     els.copyCallback.addEventListener("click", handleCopyCallbackClick);
   }

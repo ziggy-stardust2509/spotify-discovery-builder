@@ -55,20 +55,12 @@
             >
               Create Spotify App
             </a>
-            <a
-              class="btn btn-ghost"
-              href="https://developer.spotify.com/dashboard"
-              target="_blank"
-              rel="noreferrer"
-            >
-              Open Dashboard
-            </a>
             <button id="copy-callback" class="btn btn-ghost" type="button">Copy Callback URL</button>
           </div>
         </div>
 
-        <details id="advanced-credentials" class="help-box optional-box" open>
-          <summary>Connection settings (your keys first, hosted app optional)</summary>
+        <details id="advanced-credentials" class="help-box optional-box">
+          <summary>Optional: Advanced connection settings</summary>
           <form id="client-config-form">
             <div class="grid two">
               <label>
@@ -88,43 +80,17 @@
               <input id="clientSecret" name="clientSecret" type="password" autocomplete="off" />
             </label>
             <p class="helper-copy">PKCE users can leave Client Secret blank.</p>
-
-            <details class="help-box import-box">
-              <summary>Import keys from file or pasted text</summary>
-              <div class="grid two">
-                <label>
-                  Upload `.env` / JSON
-                  <input id="key-file" type="file" accept=".env,.txt,.json,application/json,text/plain" />
-                </label>
-                <label>
-                  Paste credentials
-                  <textarea
-                    id="key-paste"
-                    rows="4"
-                    placeholder="SPOTIFY_CLIENT_ID=...&#10;SPOTIFY_CLIENT_SECRET=..."
-                  ></textarea>
-                </label>
-              </div>
-              <div class="actions credential-actions">
-                <button id="import-key-file" class="btn btn-ghost" type="button">Use Uploaded File</button>
-                <button id="import-key-paste" class="btn btn-ghost" type="button">Use Pasted Text</button>
-              </div>
-              <p id="key-import-note" class="helper-copy">No key data imported yet.</p>
-            </details>
-
             <p id="client-config-note">Using server defaults unless you save overrides.</p>
             <div class="actions credential-actions">
-              <button id="save-client-config" class="btn btn-ghost" type="submit">Save Keys</button>
-              <button id="save-and-connect" class="btn btn-authorize" type="submit">Save + Connect Spotify</button>
-              <button id="use-hosted-defaults" class="btn btn-ghost" type="button">Use Hosted App (No Keys)</button>
+              <button id="use-hosted-defaults" class="btn btn-ghost" type="button">Use Hosted App</button>
               <button id="clear-client-config" class="btn btn-ghost" type="button">Clear Saved Keys</button>
             </div>
           </form>
         </details>
 
         <div class="auth-cta">
-          <a id="connect-link" class="btn btn-authorize" href="/auth/login">Authorize Spotify</a>
-          <p class="auth-cta-note">Use this if keys are already saved for this browser.</p>
+          <a id="connect-link" class="btn btn-authorize" href="/auth/login">Connect Spotify</a>
+          <p class="auth-cta-note">One click. If you edited keys above, they save automatically.</p>
         </div>
         <div class="actions secondary-actions">
           <button id="refresh-status" class="btn btn-ghost" type="button">Check Connection</button>
