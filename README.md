@@ -33,6 +33,7 @@ Web app to create and update Spotify playlists from prompts, artists, genres, an
 - Spotify developer app with redirect URI matching your public app URL:
   - local example: `http://127.0.0.1:8888/callback`
   - hosted example: `https://YOUR_PUBLIC_HOST/callback`
+  - hosted with base path example: `https://YOUR_PUBLIC_HOST/spotifried/callback`
   - for public hosting, use HTTPS redirect URI only
 
 ## Do users need their own API keys?
@@ -71,6 +72,8 @@ SPOTIFY_SEARCH_LIMIT_MAX=10
 SPM_SESSION_DIR=.sessions
 SPM_COOKIE_SECURE=true
 SPM_WEB_REDIRECT_URI=https://YOUR_PUBLIC_HOST/callback
+SPM_BASE_PATH=/spotifried
+SPM_REDIRECT_ROOT_TO_BASE=true
 YOUTUBE_API_KEY=...
 YOUTUBE_REGION=US
 YOUTUBE_MAX_SEARCH_RESULTS=5
@@ -92,6 +95,7 @@ Open:
 
 - [http://127.0.0.1:3000](http://127.0.0.1:3000)
 - if your redirect URI uses port `8888`, open [http://127.0.0.1:8888](http://127.0.0.1:8888)
+- if `SPM_BASE_PATH=/spotifried`, use `/spotifried` (for example: `https://YOUR_HOST/spotifried`)
 
 ## Web flow
 

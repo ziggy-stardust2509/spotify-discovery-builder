@@ -1,6 +1,7 @@
 const state = {
   presets: {},
   sessionId: null,
+  basePath: "",
   sessionStorageReady: true,
   loadedClientConfig: null,
   lastSelectedTracks: [],
@@ -69,6 +70,30 @@ const els = {
 function parseIntOr(value, fallback) {
   const parsed = Number.parseInt(String(value ?? ""), 10);
   return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function normalizeBasePath(value) {
+  const text = String(value || "").trim();
+  if (!text || text === "/") return "";
+  const withLeadingSlash = text.startsWith("/") ? text : `/${text}`;
+  return withLeadingSlash.replace(/\/+$/, "");
+}
+
+function detectBasePathFromLocation() {
+  const pathname = String(window.location.pathname || "/");
+  const withoutIndex = pathname.endsWith("/index.html")
+    ? pathname.slice(0, -"/index.html".length)
+    : pathname;
+  if (withoutIndex === "/" || withoutIndex === "") return "";
+  return normalizeBasePath(withoutIndex);
+}
+
+function withBasePath(pathname) {
+  const normalizedPath = String(pathname || "/");
+  const base = normalizeBasePath(state.basePath);
+  if (!base) return normalizedPath;
+  if (normalizedPath === "/") return `${base}/`;
+  return `${base}${normalizedPath}`;
 }
 
 function clearPrefillFlag(element) {
@@ -160,10 +185,10 @@ function ensureSessionId() {
 
 function updateAuthLinks() {
   if (els.connectLink) {
-    els.connectLink.href = "/auth/login";
+    els.connectLink.href = withBasePath("/auth/login");
   }
   if (els.disconnectLink) {
-    els.disconnectLink.href = "/auth/logout";
+    els.disconnectLink.href = withBasePath("/auth/logout");
   }
 }
 
@@ -173,7 +198,11 @@ function apiFetch(url, options = {}) {
   if (sid) {
     headers.set("x-spm-session-id", sid);
   }
-  return fetch(url, {
+  const requestUrl =
+    typeof url === "string" && url.startsWith("/")
+      ? withBasePath(url)
+      : url;
+  return fetch(requestUrl, {
     ...options,
     credentials: "include",
     headers
@@ -587,7 +616,7 @@ async function handleAuthorizeClick(event) {
       lower.includes("networkerror");
     if (shouldFallbackToDirectLogin) {
       // Fallback path does not depend on client-side session header support.
-      window.location.assign("/auth/login");
+      window.location.assign(withBasePath("/auth/login"));
       return;
     }
     els.connectLink.textContent = originalText;
@@ -740,6 +769,14 @@ async function loadClientConfig() {
     throw new Error(data.error || "Failed to load client config.");
   }
 
+  if (typeof data.basePath === "string") {
+    state.basePath = normalizeBasePath(data.basePath);
+  }
+  updateAuthLinks();
+  if (els.callbackUri) {
+    els.callbackUri.textContent = String(data.redirectUri || `${window.location.origin}/callback`);
+  }
+
   els.clientId.value = data.clientId || "";
   els.authMode.value = data.authMode || "pkce";
   els.clientSecret.value = "";
@@ -811,7 +848,7 @@ async function saveClientConfig(event) {
       throw new Error("Session did not persist. Open app over HTTPS and allow cookies.");
     }
     if (shouldConnect) {
-      window.location.assign("/auth/login");
+      window.location.assign(withBasePath("/auth/login"));
       return;
     }
     setStatus("neutral", "Keys saved. Click Authorize Spotify.");
@@ -1275,6 +1312,7 @@ async function submitForm(event) {
 }
 
 function init() {
+  state.basePath = detectBasePathFromLocation();
   ensureSessionId();
   updateAuthLinks();
   bindPrefillClearOnType(els.name);
@@ -1283,7 +1321,7 @@ function init() {
   bindPrefillClearOnType(els.artists);
   bindPrefillClearOnType(els.genres);
   if (els.callbackUri) {
-    els.callbackUri.textContent = `${window.location.origin}/callback`;
+    els.callbackUri.textContent = `${window.location.origin}${withBasePath("/callback")}`;
   }
   setKeyImportNote("No key data imported yet.");
   els.preset.addEventListener("change", () => {
