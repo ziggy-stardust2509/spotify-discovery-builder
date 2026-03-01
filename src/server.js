@@ -254,11 +254,11 @@ function readSessionId(req) {
   return normalizeSessionId(cookies[SESSION_COOKIE_NAME]);
 }
 
-function requireSessionHeader(req, res) {
-  const sessionId = readSessionHeaderId(req);
+function requireSessionId(req, res) {
+  const sessionId = readSessionId(req);
   if (!sessionId) {
     sendJson(res, 400, {
-      error: "Missing session header. Reload the page and try again."
+      error: "Missing session. Reload the page and try again."
     });
     return null;
   }
@@ -534,6 +534,13 @@ function explainSpotifyIntegrationError(errorMessage) {
     return "This Spotify account is not enabled for this app yet. In Development Mode, the app owner must add users in Spotify Dashboard > Users and Access.";
   }
 
+  if (
+    lower.includes("user may not be registered") ||
+    lower.includes("check settings on developer.spotify.com/dashboard")
+  ) {
+    return "This Spotify account is not enabled for this app yet. In Development Mode, the app owner must add users in Spotify Dashboard > Users and Access.";
+  }
+
   if (lower.includes("invalid redirect uri") || lower.includes("redirect uri")) {
     return "Spotify redirect URI mismatch. Use the exact same HTTPS callback URL in app settings and this server config.";
   }
@@ -657,7 +664,7 @@ async function handleClientConfigSave(req, res) {
   }
   try {
     const body = await readJsonBody(req);
-    const sessionId = requireSessionHeader(req, res);
+    const sessionId = requireSessionId(req, res);
     if (!sessionId) return;
     setSessionCookie(req, res, sessionId);
     const clientId = String(body.clientId || "").trim();
@@ -699,7 +706,7 @@ function handleClientConfigClear(req, res) {
   if (!enforceRateLimit(req, res, { bucket: "client-config-clear", max: 30 })) {
     return;
   }
-  const sessionId = requireSessionHeader(req, res);
+  const sessionId = requireSessionId(req, res);
   if (!sessionId) return;
   setSessionCookie(req, res, sessionId);
   removeFileIfExists(sessionClientConfigFile(sessionId));
@@ -711,7 +718,7 @@ async function handleSync(req, res) {
   if (!enforceRateLimit(req, res, { bucket: "sync", max: 24 })) {
     return;
   }
-  const sessionId = requireSessionHeader(req, res);
+  const sessionId = requireSessionId(req, res);
   if (!sessionId) return;
   setSessionCookie(req, res, sessionId);
   const spotify = getSpotifyClientForSession(sessionId);
@@ -761,7 +768,7 @@ async function handleAuthLoginUrl(req, res) {
   if (!enforceRateLimit(req, res, { bucket: "auth-login", max: 18 })) {
     return;
   }
-  const sessionId = requireSessionHeader(req, res);
+  const sessionId = ensureSessionId(req, res);
   if (!sessionId) return;
   setSessionCookie(req, res, sessionId);
 
@@ -840,7 +847,7 @@ function handleAuthLogoutApi(req, res) {
   if (!enforceRateLimit(req, res, { bucket: "auth-logout", max: 20 })) {
     return;
   }
-  const sessionId = requireSessionHeader(req, res);
+  const sessionId = requireSessionId(req, res);
   if (!sessionId) return;
   removeFileIfExists(sessionAuthFile(sessionId));
   removeFileIfExists(sessionClientConfigFile(sessionId));
@@ -882,7 +889,18 @@ const server = http.createServer(async (req, res) => {
 
   const proto = requestProto(req);
   const host = requestHost(req);
-  if (proto === "http" && host && !isLoopbackHost(hostToHostname(host))) {
+  const forwardedProto = firstForwardedHeaderValue(req.headers["x-forwarded-proto"]).toLowerCase();
+  const forwardedHost = firstForwardedHeaderValue(req.headers["x-forwarded-host"]);
+  const isProxiedRequest = Boolean(forwardedProto || forwardedHost);
+  const canForceHttpsRedirect = !isProxiedRequest || forwardedProto === "http";
+
+  if (
+    proto === "http" &&
+    host &&
+    !isLoopbackHost(hostToHostname(host)) &&
+    canForceHttpsRedirect
+  ) {
+    // Avoid infinite redirects when a TLS proxy omits x-forwarded-proto.
     const httpsLocation = `https://${host}${reqUrl.pathname}${reqUrl.search}`;
     redirect(res, httpsLocation);
     return;

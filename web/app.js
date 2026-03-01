@@ -1,6 +1,7 @@
 const state = {
   presets: {},
-  sessionId: null
+  sessionId: null,
+  sessionStorageReady: true
 };
 
 const PREFILL_CLEAR_IDS = ["name", "seedSong", "prompt", "artists", "genres"];
@@ -113,16 +114,28 @@ function randomHex(bytes = 24) {
 }
 
 function ensureSessionId() {
-  const storageKey = "spm_session_id";
-  const existing = localStorage.getItem(storageKey);
-  if (existing && /^[a-f0-9]{32,64}$/i.test(existing)) {
-    state.sessionId = existing.toLowerCase();
+  if (state.sessionId && /^[a-f0-9]{32,64}$/i.test(state.sessionId)) {
     return state.sessionId;
   }
-  const created = randomHex(24);
-  localStorage.setItem(storageKey, created);
-  state.sessionId = created;
-  return created;
+  if (!state.sessionStorageReady) {
+    return null;
+  }
+  const storageKey = "spm_session_id";
+  try {
+    const existing = localStorage.getItem(storageKey);
+    if (existing && /^[a-f0-9]{32,64}$/i.test(existing)) {
+      state.sessionId = existing.toLowerCase();
+      return state.sessionId;
+    }
+    const created = randomHex(24);
+    localStorage.setItem(storageKey, created);
+    state.sessionId = created;
+    return created;
+  } catch {
+    state.sessionStorageReady = false;
+    state.sessionId = null;
+    return null;
+  }
 }
 
 function updateAuthLinks() {
@@ -137,7 +150,9 @@ function updateAuthLinks() {
 function apiFetch(url, options = {}) {
   const sid = ensureSessionId();
   const headers = new Headers(options.headers || {});
-  headers.set("x-spm-session-id", sid);
+  if (sid) {
+    headers.set("x-spm-session-id", sid);
+  }
   return fetch(url, {
     ...options,
     credentials: "include",
@@ -202,10 +217,21 @@ async function handleAuthorizeClick(event) {
     }
     window.location.assign(data.authorizationUrl);
   } catch (err) {
+    const message = String(err?.message || "");
+    const lower = message.toLowerCase();
+    const shouldFallbackToDirectLogin =
+      lower.includes("missing session") ||
+      lower.includes("failed to fetch") ||
+      lower.includes("networkerror");
+    if (shouldFallbackToDirectLogin) {
+      // Fallback path does not depend on client-side session header support.
+      window.location.assign("/auth/login");
+      return;
+    }
     els.connectLink.textContent = originalText;
     els.connectLink.removeAttribute("aria-disabled");
     els.connectLink.style.pointerEvents = "";
-    setStatus("error", `Authorization failed: ${err.message}`);
+    setStatus("error", `Authorization failed: ${message || "Unknown error."}`);
   }
 }
 
@@ -363,7 +389,12 @@ async function loadClientConfig() {
     data.source === "server"
       ? " If Spotify blocks login, ask the app owner to add your account in Spotify Dashboard > Users and Access, or use your own keys."
       : "";
-  setClientConfigNote(`${sourceText} Redirect URI: ${data.redirectUri}.${warning}${hostedHint}`);
+  const storageHint = !state.sessionStorageReady
+    ? " Browser storage is unavailable, so this tab is using a cookie-based session."
+    : "";
+  setClientConfigNote(
+    `${sourceText} Redirect URI: ${data.redirectUri}.${warning}${hostedHint}${storageHint}`
+  );
   if (els.advancedCredentials) {
     els.advancedCredentials.open = data.source === "session";
   }
