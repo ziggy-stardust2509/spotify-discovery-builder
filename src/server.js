@@ -28,6 +28,8 @@ const HOST = process.env.HOST || redirectTarget.hostname || "127.0.0.1";
 const PORT = Number(process.env.PORT || redirectTarget.port || 3000);
 const CALLBACK_PATH = redirectTarget.pathname || "/callback";
 const YOUTUBE_CALLBACK_PATH = youtubeRedirectTarget?.pathname || "/auth/youtube/callback";
+const HOSTED_SPOTIFY_APP_ENABLED =
+  String(process.env.SPM_ENABLE_HOSTED_SPOTIFY_APP || "").trim().toLowerCase() === "true";
 const SEARCH_LIMIT_MAX = Number(config.searchLimitMax || 10);
 const WEB_ROOT = path.resolve(process.cwd(), "web");
 const SESSION_DIR = path.resolve(
@@ -406,15 +408,31 @@ function buildSessionSpotifyConfig(sessionId) {
   return merged;
 }
 
+function assertSpotifyClientConfigForSession(sessionId) {
+  if (HOSTED_SPOTIFY_APP_ENABLED) return;
+  if (readSessionClientConfig(sessionId)) return;
+  throw new Error(
+    "Hosted Spotify app login is disabled. Enter your own Spotify Client ID in Optional Advanced connection settings."
+  );
+}
+
 function getClientConfigSummary(sessionId, req) {
+  const sessionConfig = readSessionClientConfig(sessionId);
+  const hasCustom = Boolean(sessionConfig);
   const effective = buildSessionSpotifyConfig(sessionId);
-  const hasCustom = Boolean(readSessionClientConfig(sessionId));
   const webRedirectUri = buildWebRedirectUri(req);
+  const source = hasCustom
+    ? "session"
+    : HOSTED_SPOTIFY_APP_ENABLED
+      ? "server"
+      : "required_user";
   return {
-    source: hasCustom ? "session" : "server",
-    clientId: effective.clientId,
-    authMode: effective.authMode,
-    hasClientSecret: Boolean(effective.clientSecret),
+    source,
+    clientId: hasCustom || HOSTED_SPOTIFY_APP_ENABLED ? effective.clientId : "",
+    authMode: hasCustom || HOSTED_SPOTIFY_APP_ENABLED ? effective.authMode : "pkce",
+    hasClientSecret: hasCustom || HOSTED_SPOTIFY_APP_ENABLED
+      ? Boolean(effective.clientSecret)
+      : false,
     redirectUri: webRedirectUri,
     configuredRedirectUri: effective.redirectUri
   };
@@ -465,6 +483,7 @@ function buildYouTubeRedirectUri(req) {
 }
 
 function createAuthorizationUrlForSession(req, sessionId) {
+  assertSpotifyClientConfigForSession(sessionId);
   const state = crypto.randomBytes(16).toString("hex");
   const redirectUri = buildWebRedirectUri(req);
   assertSafeRedirectUri(redirectUri);
@@ -647,8 +666,7 @@ function explainSpotifyIntegrationError(errorMessage) {
   if (lower.includes("spotify api") && lower.includes("failed (403)")) {
     const hint =
       "This Spotify account is not enabled for this app in Spotify Developer Dashboard (Users and Access), or this endpoint is restricted in Development Mode.";
-    const next =
-      "Use hosted default app access by adding the user to allowlist, or let the user save their own app keys.";
+    const next = "Use your own Spotify app keys or ask app admin to allowlist your account.";
     return `${hint} ${next}`;
   }
 
@@ -1296,6 +1314,7 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, HOST, () => {
   console.log(`Spotify Playlist Manager running at http://${HOST}:${PORT}`);
   console.log(`Spotify redirect URI in use: ${config.redirectUri}`);
+  console.log(`Hosted Spotify app login enabled: ${HOSTED_SPOTIFY_APP_ENABLED ? "yes" : "no"}`);
   console.log(`Session storage: ${SESSION_DIR}`);
   if (CALLBACK_PATH !== "/auth/callback") {
     console.log(`Callback path mapped to: ${CALLBACK_PATH}`);

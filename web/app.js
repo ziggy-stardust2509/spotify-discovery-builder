@@ -47,7 +47,6 @@ const els = {
   saveClientConfig: document.querySelector("#save-client-config"),
   saveAndConnect: document.querySelector("#save-and-connect"),
   clearClientConfig: document.querySelector("#clear-client-config"),
-  useHostedDefaults: document.querySelector("#use-hosted-defaults"),
   connectLink: document.querySelector("#connect-link"),
   disconnectLink: document.querySelector("#disconnect-link"),
   youtubeDirectName: document.querySelector("#youtube-direct-name"),
@@ -319,6 +318,7 @@ function shouldSaveClientConfig(payload) {
   const baseline = state.loadedClientConfig;
   if (!payload.clientId) return false;
   if (!baseline) return true;
+  if (baseline.source !== "session") return true;
   if (payload.clientId !== baseline.clientId) return true;
   if (payload.authMode !== baseline.authMode) return true;
   if (payload.authMode === "standard" && payload.clientSecret) return true;
@@ -556,6 +556,16 @@ function handleImportKeyPasteClick(event) {
 
 async function handleAuthorizeClick(event) {
   event.preventDefault();
+  const currentSource = String(state.loadedClientConfig?.source || "required_user");
+  const typedClientId = String(els.clientId?.value || "").trim();
+  if (currentSource !== "session" && !typedClientId) {
+    if (els.advancedCredentials) {
+      els.advancedCredentials.open = true;
+    }
+    setStatus("error", "Enter your Spotify Client ID in Advanced connection settings first.");
+    return;
+  }
+
   const originalText = els.connectLink.textContent;
   els.connectLink.textContent = "Opening Spotify...";
   els.connectLink.setAttribute("aria-disabled", "true");
@@ -743,22 +753,22 @@ async function loadClientConfig() {
   const sourceText =
     data.source === "session"
       ? "Using your saved app keys for this browser session."
-      : "Using hosted app (no key required).";
+      : data.source === "server"
+        ? "Using hosted app keys from this server."
+        : "Hosted app login is disabled. Enter your own Spotify app keys.";
   const warning = isPublicNonHttpsUrl(data.redirectUri)
     ? " Warning: callback is not HTTPS; Spotify auth may appear unsafe or fail."
     : "";
-  const hostedHint =
-    data.source === "server"
-      ? " If hosted login fails, open advanced settings and enter your own Client ID."
-      : "";
   const storageHint = !state.sessionStorageReady
     ? " Browser storage is unavailable, so this tab is using a cookie-based session."
     : "";
   setClientConfigNote(
-    `${sourceText} Redirect URI: ${data.redirectUri}.${warning}${hostedHint}${storageHint}`
+    `${sourceText} Redirect URI: ${data.redirectUri}.${warning}${storageHint}`
   );
-  if (els.advancedCredentials) {
+  if (els.advancedCredentials && data.source !== "required_user") {
     els.advancedCredentials.open = false;
+  } else if (els.advancedCredentials) {
+    els.advancedCredentials.open = true;
   }
 }
 
@@ -826,19 +836,11 @@ async function clearClientConfig() {
       throw new Error(data.error || "Failed to clear credentials.");
     }
     await loadClientConfig();
-    setStatus("neutral", "Using hosted app (no keys). Click Authorize Spotify.");
+    setStatus("neutral", "Saved keys cleared.");
   } catch (err) {
     setClientConfigNote(`Could not clear credentials: ${err.message}`);
   } finally {
     els.clearClientConfig.disabled = false;
-  }
-}
-
-async function handleUseHostedDefaultsClick(event) {
-  event.preventDefault();
-  await clearClientConfig();
-  if (els.advancedCredentials) {
-    els.advancedCredentials.open = true;
   }
 }
 
@@ -1308,9 +1310,6 @@ function init() {
   }
   if (els.importKeyPaste) {
     els.importKeyPaste.addEventListener("click", handleImportKeyPasteClick);
-  }
-  if (els.useHostedDefaults) {
-    els.useHostedDefaults.addEventListener("click", handleUseHostedDefaultsClick);
   }
   els.authMode.addEventListener("change", applyAuthModeUI);
   els.discoveryLevel.addEventListener("input", updateDiscoveryUI);
