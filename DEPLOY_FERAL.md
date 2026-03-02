@@ -6,11 +6,14 @@ This app can be hosted on Feral so multiple users can sign in with their own Spo
 
 In Spotify Developer Dashboard, add an exact redirect URI for your hosted app:
 
-- `https://YOUR_PUBLIC_HOST/spotifried/callback`
+- `https://oceanus.feralhosting.com/YOUR_USERNAME/spotifried/callback`
 
 Example if your app is exposed on `oceanus.feralhosting.com`:
 
-- `https://oceanus.feralhosting.com/spotifried/callback`
+- `https://oceanus.feralhosting.com/daffadillion/spotifried/callback`
+
+Avoid using `https://YOUR_USERNAME.oceanus.feralhosting.com` for browser access.
+The shared Feral certificate is for `*.feralhosting.com` and does not cover that nested hostname.
 
 ## 2. Upload project to Feral
 
@@ -48,9 +51,10 @@ Create `/media/sdq1/daffadillion/apps/spotify-playlist-manager/.env`:
 ```env
 SPOTIFY_CLIENT_ID=YOUR_SPOTIFY_CLIENT_ID
 SPOTIFY_AUTH_MODE=pkce
-SPOTIFY_REDIRECT_URI=https://YOUR_PUBLIC_HOST/spotifried/callback
-SPM_WEB_REDIRECT_URI=https://YOUR_PUBLIC_HOST/spotifried/callback
+SPOTIFY_REDIRECT_URI=https://oceanus.feralhosting.com/YOUR_USERNAME/spotifried/callback
+SPM_WEB_REDIRECT_URI=https://oceanus.feralhosting.com/YOUR_USERNAME/spotifried/callback
 SPM_BASE_PATH=/spotifried
+SPM_PUBLIC_BASE_PATH=/YOUR_USERNAME/spotifried
 SPM_REDIRECT_ROOT_TO_BASE=false
 HOST=0.0.0.0
 PORT=3000
@@ -101,9 +105,9 @@ Your proxy must preserve:
 
 ## 7. Validate
 
-1. Open `https://YOUR_PUBLIC_HOST/spotifried`
+1. Open `https://oceanus.feralhosting.com/YOUR_USERNAME/spotifried`
 2. Click **Connect Spotify**
-3. Complete consent and return to `/spotifried/callback`
+3. Complete consent and return to `/YOUR_USERNAME/spotifried/callback`
 4. Confirm status says connected
 5. Run a playlist sync
 

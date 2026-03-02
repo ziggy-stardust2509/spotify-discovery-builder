@@ -33,6 +33,9 @@ const redirectTarget = new URL(config.redirectUri);
 const youtubeRedirectTarget = parseUrlOrNull(config.youtubeAuthRedirectUri);
 
 const APP_BASE_PATH = normalizeBasePath(process.env.SPM_BASE_PATH || "/spotifried");
+const PUBLIC_BASE_PATH = normalizeBasePath(
+  process.env.SPM_PUBLIC_BASE_PATH || APP_BASE_PATH
+);
 const REDIRECT_ROOT_TO_BASE =
   APP_BASE_PATH &&
   String(process.env.SPM_REDIRECT_ROOT_TO_BASE || "false").trim().toLowerCase() === "true";
@@ -121,7 +124,7 @@ function redirect(res, location) {
 function redirectToApp(res, params = {}) {
   const search = new URLSearchParams(params);
   const suffix = search.toString();
-  const target = withAppBasePath(suffix ? `/?${suffix}` : "/");
+  const target = withPublicBasePath(suffix ? `/?${suffix}` : "/");
   redirect(res, target);
 }
 
@@ -207,7 +210,7 @@ function buildWebRedirectUri(req) {
     return normalizeRedirectUriForBasePath(config.redirectUri, CALLBACK_ROUTE_PATH);
   }
   const proto = requestProto(req);
-  const callbackPath = withAppBasePath(CALLBACK_ROUTE_PATH);
+  const callbackPath = withPublicBasePath(CALLBACK_ROUTE_PATH);
   const candidate = `${proto}://${host}${callbackPath}`;
   const isPublicHttp = proto !== "https" && !isLoopbackHost(hostToHostname(host));
   if (isPublicHttp) {
@@ -449,7 +452,7 @@ function getClientConfigSummary(sessionId, req) {
     hasClientSecret: hasCustom || HOSTED_SPOTIFY_APP_ENABLED
       ? Boolean(effective.clientSecret)
       : false,
-    basePath: APP_BASE_PATH,
+    basePath: PUBLIC_BASE_PATH,
     redirectUri: webRedirectUri,
     configuredRedirectUri: effective.redirectUri
   };
@@ -473,24 +476,49 @@ function normalizePathname(pathname) {
 function withAppBasePath(pathname) {
   const normalized = normalizePathname(pathname);
   if (!APP_BASE_PATH) return normalized;
+  if (normalized === APP_BASE_PATH || normalized.startsWith(`${APP_BASE_PATH}/`)) {
+    return normalized;
+  }
   if (normalized === "/") return `${APP_BASE_PATH}/`;
   return `${APP_BASE_PATH}${normalized}`;
 }
 
-function stripAppBasePath(pathname) {
+function withPublicBasePath(pathname) {
   const normalized = normalizePathname(pathname);
-  if (!APP_BASE_PATH) return null;
-  if (normalized === APP_BASE_PATH) return "/";
-  if (normalized.startsWith(`${APP_BASE_PATH}/`)) {
-    return normalized.slice(APP_BASE_PATH.length) || "/";
+  if (!PUBLIC_BASE_PATH) return normalized;
+  if (normalized === PUBLIC_BASE_PATH || normalized.startsWith(`${PUBLIC_BASE_PATH}/`)) {
+    return normalized;
+  }
+  if (normalized === "/") return `${PUBLIC_BASE_PATH}/`;
+  return `${PUBLIC_BASE_PATH}${normalized}`;
+}
+
+function stripBasePath(pathname, basePath) {
+  const normalized = normalizePathname(pathname);
+  const normalizedBase = normalizeBasePath(basePath);
+  if (!normalizedBase) return null;
+  if (normalized === normalizedBase) return "/";
+  if (normalized.startsWith(`${normalizedBase}/`)) {
+    return normalized.slice(normalizedBase.length) || "/";
   }
   return null;
 }
 
+function stripAppBasePath(pathname) {
+  return stripBasePath(pathname, APP_BASE_PATH);
+}
+
+function stripPublicBasePath(pathname) {
+  return stripBasePath(pathname, PUBLIC_BASE_PATH);
+}
+
 function callbackRoutePath(pathname) {
   const normalized = normalizePathname(pathname);
-  const stripped = stripAppBasePath(normalized);
-  return stripped || normalized;
+  const appStripped = stripAppBasePath(normalized);
+  if (appStripped) return appStripped;
+  const publicStripped = stripPublicBasePath(normalized);
+  if (publicStripped) return publicStripped;
+  return normalized;
 }
 
 const CALLBACK_ROUTE_PATH = callbackRoutePath(CALLBACK_PATH);
@@ -498,7 +526,7 @@ const YOUTUBE_CALLBACK_ROUTE_PATH = callbackRoutePath(YOUTUBE_CALLBACK_PATH);
 
 function normalizeRedirectUriForBasePath(value, callbackRoutePathValue = CALLBACK_ROUTE_PATH) {
   const text = String(value || "").trim();
-  if (!text || !APP_BASE_PATH) return text;
+  if (!text || !PUBLIC_BASE_PATH) return text;
   let parsed;
   try {
     parsed = new URL(text);
@@ -506,7 +534,7 @@ function normalizeRedirectUriForBasePath(value, callbackRoutePathValue = CALLBAC
     return text;
   }
   const currentPath = normalizePathname(parsed.pathname);
-  const baseCallbackPath = withAppBasePath(callbackRoutePathValue);
+  const baseCallbackPath = withPublicBasePath(callbackRoutePathValue);
   if (currentPath === callbackRoutePathValue && currentPath !== baseCallbackPath) {
     parsed.pathname = baseCallbackPath;
     parsed.search = "";
@@ -537,14 +565,15 @@ function buildYouTubeRedirectUri(req) {
   }
 
   const host = requestHost(req);
+  const youtubeCallbackPath = withPublicBasePath(YOUTUBE_CALLBACK_ROUTE_PATH);
   if (!host) {
-    return `http://${HOST}:${PORT}${YOUTUBE_CALLBACK_PATH}`;
+    return `http://${HOST}:${PORT}${youtubeCallbackPath}`;
   }
   const proto = requestProto(req);
   if (proto !== "https" && !isLoopbackHost(hostToHostname(host))) {
-    return `https://${host}${YOUTUBE_CALLBACK_PATH}`;
+    return `https://${host}${youtubeCallbackPath}`;
   }
-  return `${proto}://${host}${YOUTUBE_CALLBACK_PATH}`;
+  return `${proto}://${host}${youtubeCallbackPath}`;
 }
 
 function createAuthorizationUrlForSession(req, sessionId) {
@@ -1117,7 +1146,7 @@ async function handleAuthLogin(_req, res) {
     sendText(
       res,
       400,
-      `${err.message}. Use https://YOUR_HOST${withAppBasePath("/callback")} in Spotify app settings.`
+      `${err.message}. Use https://YOUR_HOST${withPublicBasePath("/callback")} in Spotify app settings.`
     );
   }
 }
@@ -1136,7 +1165,7 @@ async function handleAuthLoginUrl(req, res) {
     sendJson(res, 200, { authorizationUrl });
   } catch (err) {
     sendJson(res, 400, {
-      error: `${err.message}. Use https://YOUR_HOST${withAppBasePath("/callback")} in Spotify app settings.`
+      error: `${err.message}. Use https://YOUR_HOST${withPublicBasePath("/callback")} in Spotify app settings.`
     });
   }
 }
@@ -1200,7 +1229,7 @@ function handleAuthLogout(req, res) {
     removeFileIfExists(sessionYouTubeAuthFile(sessionId));
   }
   clearSessionCookie(req, res);
-  redirect(res, "/?logged_out=1");
+  redirectToApp(res, { logged_out: "1" });
 }
 
 function handleAuthLogoutApi(req, res) {
@@ -1279,10 +1308,10 @@ const server = http.createServer(async (req, res) => {
 
   if (APP_BASE_PATH && (rawPath === "/" || rawPath === "/index.html")) {
     if (REDIRECT_ROOT_TO_BASE) {
-      redirect(res, withAppBasePath("/"));
+      redirect(res, withPublicBasePath("/"));
       return;
     }
-    sendText(res, 404, `Not found. Use ${withAppBasePath("/")}`);
+    sendText(res, 404, `Not found. Use ${withPublicBasePath("/")}`);
     return;
   }
 
@@ -1396,8 +1425,11 @@ server.listen(PORT, HOST, () => {
   if (APP_BASE_PATH) {
     console.log(`App URL base path: ${APP_BASE_PATH}`);
   }
+  if (PUBLIC_BASE_PATH && PUBLIC_BASE_PATH !== APP_BASE_PATH) {
+    console.log(`Public URL base path: ${PUBLIC_BASE_PATH}`);
+  }
   console.log(`Spotify redirect URI in use: ${config.redirectUri}`);
-  console.log(`Expected Spotify callback path: ${withAppBasePath(CALLBACK_ROUTE_PATH)}`);
+  console.log(`Expected Spotify callback path: ${withPublicBasePath(CALLBACK_ROUTE_PATH)}`);
   console.log(`Hosted Spotify app login enabled: ${HOSTED_SPOTIFY_APP_ENABLED ? "yes" : "no"}`);
   console.log(`Session storage: ${SESSION_DIR}`);
   if (CALLBACK_PATH !== "/auth/callback") {
@@ -1407,8 +1439,8 @@ server.listen(PORT, HOST, () => {
     console.log(`YouTube callback path mapped to: ${YOUTUBE_CALLBACK_PATH}`);
   }
   if (REDIRECT_ROOT_TO_BASE) {
-    console.log(`Root path redirects to: ${withAppBasePath("/")}`);
+    console.log(`Root path redirects to: ${withPublicBasePath("/")}`);
   } else if (APP_BASE_PATH) {
-    console.log(`Root path is disabled. Use: ${withAppBasePath("/")}`);
+    console.log(`Root path is disabled. Use: ${withPublicBasePath("/")}`);
   }
 });
