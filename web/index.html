@@ -25,7 +25,6 @@
           The goal: better personalization without repeating the same algorithm loop.
         </p>
         <div class="hero-highlights">
-          <span class="tag tag-hot">YouTube mode: no Spotify login required</span>
           <span class="tag">Customization first</span>
           <span class="tag">Discovery depth control</span>
           <span class="tag">Less same-song repetition</span>
@@ -34,49 +33,11 @@
 
       <section class="panel reveal delay-1">
         <div class="panel-header">
-          <h2>Start Here: YouTube Playlist (No Spotify Connection)</h2>
-          <span class="pill ok">Fast Path</span>
-        </div>
-        <p class="section-subtitle">
-          Paste songs and generate a YouTube playlist immediately. Use this if you do not want Spotify auth.
-        </p>
-        <div class="youtube-direct-box">
-          <div class="grid two">
-            <label>
-              Playlist Name
-              <input id="youtube-direct-name" value="Discovery Mix" />
-            </label>
-            <label>
-              Song List (one per line)
-              <textarea
-                id="youtube-direct-tracks"
-                rows="4"
-                placeholder="Daft Punk - Get Lucky&#10;Kendrick Lamar - Alright&#10;Massive Attack - Teardrop"
-              ></textarea>
-            </label>
-          </div>
-          <div class="actions secondary-actions">
-            <button id="save-youtube-direct" class="btn btn-primary" type="button">
-              Save To YouTube Account
-            </button>
-            <button id="build-youtube-direct" class="btn btn-ghost" type="button">
-              Get YouTube Links (No Login)
-            </button>
-          </div>
-          <p id="youtube-direct-status" class="helper-copy">
-            Paste songs above to create a YouTube playlist without connecting Spotify.
-          </p>
-          <ul id="youtube-direct-link-list" class="tracks"></ul>
-        </div>
-      </section>
-
-      <section class="panel reveal delay-1">
-        <div class="panel-header">
-          <h2>Step 1 (Optional): Connect Spotify</h2>
+          <h2>Step 1: Connect Spotify</h2>
           <span id="status-pill" class="pill neutral">Checking</span>
         </div>
         <p class="section-subtitle">
-          Connect Spotify only if you want AI discovery from your Spotify taste profile.
+          Connect Spotify to create or update your playlists.
         </p>
         <div class="setup-guide">
           <h3>Quick Setup</h3>
@@ -294,19 +255,7 @@
         <div class="panel-header">
           <h2>Step 3: Review & Open</h2>
         </div>
-        <p id="result-summary">Run your first build to preview fresh recommendations.</p>
-        <div class="actions secondary-actions">
-          <button id="save-youtube-playlist" class="btn btn-primary" type="button" disabled>
-            Save To YouTube Account
-          </button>
-          <button id="make-youtube-playlist" class="btn btn-ghost" type="button" disabled>
-            Get YouTube Links (No Login)
-          </button>
-        </div>
-        <p id="youtube-status" class="helper-copy">
-          Generate a Spotify playlist first, then save to YouTube or open quick links.
-        </p>
-        <ul id="youtube-link-list" class="tracks"></ul>
+        <p id="result-summary">Run your first build to generate a Spotify playlist.</p>
         <ul id="track-list" class="tracks"></ul>
       </section>
     </main>
